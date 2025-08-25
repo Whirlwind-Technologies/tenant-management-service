@@ -1,0 +1,236 @@
+# Base Configuration for Tenant Management Service
+spring:
+  application:
+    name: tenant-management-service
+
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+
+  # Database Configuration
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/tenant_db}
+    username: ${DB_USERNAME:tenant_user}
+    password: ${DB_PASSWORD:tenant_pass}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      connection-timeout: 30000
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      minimum-idle: ${DB_MIN_IDLE:5}
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      pool-name: TenantHikariPool
+
+  # JPA Configuration
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        format_sql: true
+        jdbc:
+          batch_size: 25
+          batch_versioned_data: true
+        order_inserts: true
+        order_updates: true
+        generate_statistics: ${HIBERNATE_STATS:false}
+    show-sql: ${JPA_SHOW_SQL:false}
+    open-in-view: false
+
+  # Redis Configuration
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 2
+          max-wait: -1ms
+
+  # Cache Configuration
+  cache:
+    type: redis
+    redis:
+      time-to-live: ${CACHE_TTL:3600000}
+      cache-null-values: false
+      enable-statistics: true
+    cache-names:
+      - tenants
+      - tenant-settings
+      - tenant-features
+      - subscriptions
+      - organization-types
+
+  # Flyway Configuration
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+    schemas: public
+    table: flyway_schema_history
+    validate-on-migrate: true
+    clean-disabled: true
+
+  # Security Configuration (Basic for now)
+  security:
+    user:
+      name: ${ADMIN_USERNAME:admin}
+      password: ${ADMIN_PASSWORD:admin123}
+      roles: ADMIN
+
+# Actuator Configuration
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,env,loggers,caches
+      base-path: /management
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  health:
+    redis:
+      enabled: true
+    db:
+      enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      environment: ${spring.profiles.active}
+  tracing:
+    sampling:
+      probability: ${TRACING_PROBABILITY:0.1}
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
+# Server Configuration
+server:
+  port: ${SERVER_PORT:8080}
+  servlet:
+    context-path: /api/v1
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain
+  error:
+    include-message: always
+    include-binding-errors: always
+    include-stacktrace: on_param
+    include-exception: false
+  shutdown: graceful
+
+# API Documentation
+springdoc:
+  api-docs:
+    enabled: true
+    path: /api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+  show-actuator: true
+
+# Logging Configuration
+logging:
+  level:
+    root: ${LOG_LEVEL_ROOT:INFO}
+    com.nnipa: ${LOG_LEVEL_APP:DEBUG}
+    org.springframework.web: ${LOG_LEVEL_WEB:INFO}
+    org.springframework.security: ${LOG_LEVEL_SECURITY:INFO}
+    org.hibernate.SQL: ${LOG_LEVEL_SQL:INFO}
+    org.hibernate.type.descriptor.sql.BasicBinder: ${LOG_LEVEL_SQL_PARAMS:TRACE}
+  pattern:
+    console: '%d{yyyy-MM-dd HH:mm:ss} - %msg%n'
+    file: '%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n'
+  file:
+    name: logs/tenant-management-service.log
+    max-size: 10MB
+    max-history: 30
+
+# Application-specific Configuration
+app:
+  tenant:
+    default-timezone: UTC
+    max-users-per-tenant: ${MAX_USERS_PER_TENANT:1000}
+    trial-period-days: ${TRIAL_PERIOD_DAYS:30}
+    cache-ttl-minutes: ${TENANT_CACHE_TTL:60}
+
+  organization:
+    types:
+      - GOVERNMENT_AGENCY
+      - CORPORATION
+      - ACADEMIC_INSTITUTION
+      - NON_PROFIT
+      - INDIVIDUAL
+      - RESEARCH_ORGANIZATION
+
+  subscription:
+    plans:
+      - FREEMIUM
+      - BASIC
+      - PROFESSIONAL
+      - ENTERPRISE
+      - GOVERNMENT
+      - ACADEMIC
+    grace-period-days: ${GRACE_PERIOD_DAYS:7}
+
+  security:
+    jwt-secret: ${JWT_SECRET:default-secret-change-in-production}
+    jwt-expiration-ms: ${JWT_EXPIRATION:3600000}
+
+  integration:
+    auth-service-url: ${AUTH_SERVICE_URL:http://auth-service:8081}
+    billing-service-url: ${BILLING_SERVICE_URL:http://billing-service:8082}
+    notification-service-url: ${NOTIFICATION_SERVICE_URL:http://notification-service:8083}
+
+# Resilience4j Configuration
+resilience4j:
+  circuitbreaker:
+    instances:
+      auth-service:
+        register-health-indicator: true
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        wait-duration-in-open-state: 5s
+        failure-rate-threshold: 50
+        event-consumer-buffer-size: 10
+      billing-service:
+        register-health-indicator: true
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        wait-duration-in-open-state: 5s
+        failure-rate-threshold: 50
+        event-consumer-buffer-size: 10
+
+  retry:
+    instances:
+      auth-service:
+        max-attempts: 3
+        wait-duration: 1s
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+      billing-service:
+        max-attempts: 3
+        wait-duration: 1s
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+
+  timelimiter:
+    instances:
+      auth-service:
+        timeout-duration: 3s
+        cancel-running-future: true
+      billing-service:
+        timeout-duration: 5s
+        cancel-running-future: true

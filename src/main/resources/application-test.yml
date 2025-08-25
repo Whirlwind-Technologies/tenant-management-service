@@ -1,0 +1,98 @@
+# Test Environment Configuration
+spring:
+  # Use H2 for unit tests, TestContainers for integration tests
+  datasource:
+    url: jdbc:h2:mem:testdb;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+
+  # JPA Test Settings
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+        format_sql: false
+
+  # Disable Flyway for H2 tests
+  flyway:
+    enabled: false
+
+  # Use embedded Redis for tests
+  data:
+    redis:
+      host: localhost
+      port: 6370
+
+  # Cache settings for testing
+  cache:
+    type: simple
+
+# Actuator - Limited for tests
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+# Server Configuration
+server:
+  port: 0  # Random port for tests
+
+# Logging - Less verbose for tests
+logging:
+  level:
+    root: WARN
+    com.nnipa.platform: INFO
+    org.springframework.test: INFO
+    org.testcontainers: INFO
+
+# Application Settings for Testing
+app:
+  tenant:
+    cache-ttl-minutes: 0  # No caching in tests
+    trial-period-days: 7
+
+  security:
+    jwt-secret: test-secret-key
+    jwt-expiration-ms: 3600000
+
+  integration:
+    # Mock service URLs for testing
+    auth-service-url: http://localhost:9081
+    billing-service-url: http://localhost:9082
+    notification-service-url: http://localhost:9083
+
+# Test profiles for different test scenarios
+---
+spring:
+  config:
+    activate:
+      on-profile: integration-test
+
+  # Use TestContainers for integration tests
+  datasource:
+    url: jdbc:tc:postgresql:16:///test_db
+    driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  flyway:
+    enabled: true
+
+  # Use TestContainers Redis
+  data:
+    redis:
+      host: ${embedded.redis.host}
+      port: ${embedded.redis.port}
+
+  cache:
+    type: redis
