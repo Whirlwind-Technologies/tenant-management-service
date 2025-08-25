@@ -6,6 +6,7 @@ import com.nnipa.tenant.enums.TenantIsolationStrategy;
 import com.nnipa.tenant.enums.TenantStatus;
 import jakarta.persistence.*;
 import lombok.*;
+import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.Where;
 
 import java.time.Instant;
@@ -29,7 +30,7 @@ import java.util.UUID;
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
-@Builder
+@SuperBuilder
 @ToString(exclude = {"subscription", "settings", "featureFlags", "childTenants"})
 @EqualsAndHashCode(callSuper = true, exclude = {"subscription", "settings", "featureFlags", "childTenants"})
 @Where(clause = "is_deleted = false")

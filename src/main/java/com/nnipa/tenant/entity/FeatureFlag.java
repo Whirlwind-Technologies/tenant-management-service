@@ -2,6 +2,7 @@ package com.nnipa.tenant.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.Where;
 
 import java.time.Instant;
@@ -21,7 +22,7 @@ import java.time.Instant;
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
-@Builder
+@SuperBuilder
 @ToString(exclude = "tenant")
 @EqualsAndHashCode(callSuper = true, exclude = "tenant")
 @Where(clause = "is_deleted = false")

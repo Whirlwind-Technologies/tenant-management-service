@@ -238,6 +238,7 @@
 					</annotationProcessorPaths>
 					<compilerArgs>
 						<arg>-parameters</arg>
+						<!-- MapStruct processor options -->
 					</compilerArgs>
 				</configuration>
 			</plugin>

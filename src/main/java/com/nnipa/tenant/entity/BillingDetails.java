@@ -2,6 +2,7 @@ package com.nnipa.tenant.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.Where;
 
 /**
@@ -15,7 +16,7 @@ import org.hibernate.annotations.Where;
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
-@Builder
+@SuperBuilder
 @ToString(exclude = "subscription")
 @EqualsAndHashCode(callSuper = true, exclude = "subscription")
 @Where(clause = "is_deleted = false")

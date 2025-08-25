@@ -2,6 +2,7 @@ package com.nnipa.tenant.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import lombok.experimental.SuperBuilder;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -22,7 +23,7 @@ import java.time.LocalDate;
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
-@Builder
+@SuperBuilder
 @ToString(exclude = "subscription")
 @EqualsAndHashCode(callSuper = true, exclude = "subscription")
 public class UsageRecord extends BaseEntity {

@@ -3,6 +3,7 @@ package com.nnipa.tenant.entity;
 import com.nnipa.tenant.enums.SubscriptionPlan;
 import jakarta.persistence.*;
 import lombok.*;
+import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.Where;
 
 import java.math.BigDecimal;
@@ -25,7 +26,7 @@ import java.util.Set;
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
-@Builder
+@SuperBuilder
 @ToString(exclude = {"tenant", "billingDetails", "usageRecords"})
 @EqualsAndHashCode(callSuper = true, exclude = {"tenant", "billingDetails", "usageRecords"})
 @Where(clause = "is_deleted = false")
