@@ -156,6 +156,7 @@ public class TenantInterceptor implements HandlerInterceptor {
                 path.contains("/actuator/") ||
                 path.contains("/swagger") ||
                 path.contains("/api-docs") ||
-                path.contains("/register");
+                path.contains("/register") ||
+                path.contains("/tenant-management/");
     }
 }

@@ -213,13 +213,12 @@ public class TenantService {
         log.warn("Tenant marked for deletion: {}", id);
     }
 
-    @Cacheable(value = "tenants", key = "#id")
+
     public Optional<Tenant> getTenantById(UUID id) {
         log.debug("Fetching tenant by ID: {}", id);
         return tenantRepository.findById(id);
     }
 
-    @Cacheable(value = "tenants", key = "#code")
     public Optional<Tenant> getTenantByCode(String code) {
         log.debug("Fetching tenant by code: {}", code);
         return tenantRepository.findByTenantCode(code);
