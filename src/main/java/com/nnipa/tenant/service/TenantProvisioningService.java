@@ -1,7 +1,5 @@
 package com.nnipa.tenant.service;
 
-import com.nnipa.tenant.config.MultiTenantDataSourceConfig;
-import com.nnipa.tenant.config.SchemaService;
 import com.nnipa.tenant.entity.Tenant;
 import com.nnipa.tenant.enums.OrganizationType;
 import com.nnipa.tenant.enums.TenantIsolationStrategy;
@@ -9,15 +7,17 @@ import com.nnipa.tenant.enums.TenantStatus;
 import com.nnipa.tenant.repository.TenantRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import javax.sql.DataSource;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 /**
- * Service for provisioning new tenants with appropriate isolation strategy.
+ * Service for provisioning tenants with appropriate data isolation.
  * Handles database/schema creation based on organization type and requirements.
  */
 @Slf4j
@@ -26,8 +26,14 @@ import java.util.UUID;
 public class TenantProvisioningService {
 
     private final TenantRepository tenantRepository;
-    private final SchemaService schemaService;
-    private final MultiTenantDataSourceConfig dataSourceConfig;
+    private final SchemaManagementService schemaService;
+    private final DatabaseProvisioningService databaseService;
+
+    @Value("${app.tenant.auto-activate:false}")
+    private boolean autoActivate;
+
+    @Value("${app.tenant.async-provisioning:true}")
+    private boolean asyncProvisioning;
 
     /**
      * Provisions a new tenant with appropriate isolation strategy.
@@ -41,7 +47,7 @@ public class TenantProvisioningService {
             // Step 1: Determine isolation strategy based on organization type
             TenantIsolationStrategy strategy = determineIsolationStrategy(
                     tenant.getOrganizationType(),
-                    tenant.getComplianceFrameworks().size() > 0
+                    tenant.getComplianceFrameworks() != null && !tenant.getComplianceFrameworks().isEmpty()
             );
             tenant.setIsolationStrategy(strategy);
 
@@ -68,30 +74,33 @@ public class TenantProvisioningService {
             }
 
             // Step 3: Set tenant status
-            tenant.setStatus(TenantStatus.PENDING_VERIFICATION);
+            tenant.setStatus(TenantStatus.PROVISIONING);
 
             // Step 4: Save tenant metadata
             tenant = tenantRepository.save(tenant);
             log.info("Tenant metadata saved: {}", tenant.getId());
 
-            // Step 5: Provision database/schema based on strategy
-            provisionDataResources(tenant);
+            // Step 5: Provision data resources based on strategy
+            if (asyncProvisioning && requiresProvisioning(strategy)) {
+                // Async provisioning for long-running operations
+                provisionDataResourcesAsync(tenant);
+            } else {
+                // Synchronous provisioning
+                provisionDataResources(tenant);
 
-            // Step 6: Activate tenant if auto-activation is enabled
-            if (shouldAutoActivate(tenant)) {
-                tenant.setStatus(TenantStatus.ACTIVE);
-                tenant.setActivatedAt(Instant.now());
-                tenant.setIsVerified(true);
-                tenant.setVerifiedAt(Instant.now());
-                tenant = tenantRepository.save(tenant);
-                log.info("Tenant auto-activated: {}", tenant.getId());
+                // Step 6: Activate tenant if auto-activation is enabled
+                if (shouldAutoActivate(tenant)) {
+                    activateTenant(tenant);
+                }
             }
 
-            log.info("Tenant provisioning completed successfully for: {}", tenant.getName());
+            log.info("Tenant provisioning initiated for: {}", tenant.getName());
             return tenant;
 
         } catch (Exception e) {
             log.error("Error provisioning tenant: {}", tenant.getName(), e);
+            tenant.setStatus(TenantStatus.PROVISIONING_FAILED);
+            tenantRepository.save(tenant);
             throw new TenantProvisioningException("Failed to provision tenant", e);
         }
     }
@@ -99,178 +108,66 @@ public class TenantProvisioningService {
     /**
      * Provisions data resources (database/schema) for the tenant.
      */
-    private void provisionDataResources(Tenant tenant) {
-        switch (tenant.getIsolationStrategy()) {
-            case DATABASE_PER_TENANT -> provisionDatabase(tenant);
-            case SCHEMA_PER_TENANT, HYBRID_POOL -> provisionSchema(tenant);
-            case SHARED_SCHEMA_ROW_LEVEL, SHARED_SCHEMA_BASIC -> {
-                // No provisioning needed for shared schema
-                log.info("Using shared schema for tenant: {}", tenant.getId());
+    @Transactional
+    public void provisionDataResources(Tenant tenant) {
+        log.info("Provisioning data resources for tenant: {} with strategy: {}",
+                tenant.getName(), tenant.getIsolationStrategy());
+
+        try {
+            switch (tenant.getIsolationStrategy()) {
+                case DATABASE_PER_TENANT -> {
+                    log.info("Creating database for tenant: {}", tenant.getName());
+                    databaseService.createDatabase(tenant.getDatabaseName(), tenant.getId());
+                    tenant.setStatus(TenantStatus.DATABASE_CREATED);
+                }
+                case SCHEMA_PER_TENANT, HYBRID_POOL -> {
+                    log.info("Creating schema for tenant: {}", tenant.getName());
+                    schemaService.createSchema(tenant.getSchemaName());
+                    tenant.setStatus(TenantStatus.SCHEMA_CREATED);
+                }
+                case SHARED_SCHEMA_ROW_LEVEL, SHARED_SCHEMA_BASIC -> {
+                    // No specific provisioning needed, just set up row-level security context
+                    log.info("Tenant will use shared schema with row-level security");
+                    tenant.setStatus(TenantStatus.READY);
+                }
             }
-        }
-    }
 
-    /**
-     * Provisions a dedicated database for the tenant.
-     */
-    private void provisionDatabase(Tenant tenant) {
-        try {
-            String dbName = tenant.getDatabaseName();
-            log.info("Provisioning database: {} for tenant: {}", dbName, tenant.getId());
+            // Update tenant with provisioning details
+            tenant.setProvisionedAt(Instant.now());
+            tenantRepository.save(tenant);
 
-            // Note: Database creation typically requires superuser privileges
-            // and cannot be done in a transaction. This would typically be
-            // handled by an external provisioning service or script.
-
-            // For now, we'll create the data source configuration
-            String jdbcUrl = String.format("jdbc:postgresql://%s:%d/%s",
-                    tenant.getDatabaseServer(),
-                    tenant.getDatabasePort(),
-                    dbName
-            );
-
-            // Create tenant-specific data source
-            DataSource tenantDataSource = dataSourceConfig.createTenantDataSource(
-                    tenant.getId().toString(),
-                    jdbcUrl,
-                    "tenant_" + tenant.getId(), // username
-                    generateSecurePassword(),    // password
-                    tenant.getConnectionPoolSize()
-            );
-
-            log.info("Database provisioned and data source created for tenant: {}", tenant.getId());
+            log.info("Data resources provisioned successfully for tenant: {}", tenant.getName());
 
         } catch (Exception e) {
-            log.error("Error provisioning database for tenant: {}", tenant.getId(), e);
-            throw new TenantProvisioningException("Failed to provision database", e);
+            log.error("Failed to provision data resources for tenant: {}", tenant.getName(), e);
+            tenant.setStatus(TenantStatus.PROVISIONING_FAILED);
+            tenantRepository.save(tenant);
+            throw new TenantProvisioningException("Failed to provision data resources", e);
         }
     }
 
     /**
-     * Provisions a schema for the tenant.
+     * Asynchronously provisions data resources for the tenant.
      */
-    private void provisionSchema(Tenant tenant) {
+    @Async
+    public CompletableFuture<Tenant> provisionDataResourcesAsync(Tenant tenant) {
+        log.info("Starting async provisioning for tenant: {}", tenant.getName());
+
         try {
-            String schemaName = tenant.getSchemaName();
-            log.info("Provisioning schema: {} for tenant: {}", schemaName, tenant.getId());
+            // Provision resources
+            provisionDataResources(tenant);
 
-            // Create schema
-            schemaService.createSchema(schemaName);
+            // Auto-activate if configured
+            if (shouldAutoActivate(tenant)) {
+                activateTenant(tenant);
+            }
 
-            // Initialize schema with tenant-specific tables
-            schemaService.setSchema(schemaName);
-
-            // Run Flyway migrations for tenant schema (if needed)
-            // This would typically be handled by a separate migration service
-
-            log.info("Schema provisioned for tenant: {}", tenant.getId());
+            return CompletableFuture.completedFuture(tenant);
 
         } catch (Exception e) {
-            log.error("Error provisioning schema for tenant: {}", tenant.getId(), e);
-            throw new TenantProvisioningException("Failed to provision schema", e);
-        } finally {
-            // Reset to public schema
-            schemaService.clearSchema();
+            log.error("Async provisioning failed for tenant: {}", tenant.getName(), e);
+            return CompletableFuture.failedFuture(e);
         }
-    }
-
-    /**
-     * Determines the appropriate isolation strategy based on organization type.
-     */
-    private TenantIsolationStrategy determineIsolationStrategy(
-            OrganizationType orgType, boolean hasCompliance) {
-
-        // Government and financial always get database isolation
-        if (orgType == OrganizationType.GOVERNMENT_AGENCY ||
-                orgType == OrganizationType.FINANCIAL_INSTITUTION) {
-            return TenantIsolationStrategy.DATABASE_PER_TENANT;
-        }
-
-        // Healthcare gets database or schema isolation
-        if (orgType == OrganizationType.HEALTHCARE) {
-            return hasCompliance ?
-                    TenantIsolationStrategy.DATABASE_PER_TENANT :
-                    TenantIsolationStrategy.SCHEMA_PER_TENANT;
-        }
-
-        // Large organizations get schema isolation
-        if (orgType == OrganizationType.CORPORATION ||
-                orgType == OrganizationType.ACADEMIC_INSTITUTION) {
-            return TenantIsolationStrategy.SCHEMA_PER_TENANT;
-        }
-
-        // Small organizations get row-level isolation
-        if (orgType == OrganizationType.RESEARCH_ORGANIZATION ||
-                orgType == OrganizationType.NON_PROFIT ||
-                orgType == OrganizationType.STARTUP) {
-            return TenantIsolationStrategy.SHARED_SCHEMA_ROW_LEVEL;
-        }
-
-        // Individuals get basic shared schema
-        if (orgType == OrganizationType.INDIVIDUAL) {
-            return TenantIsolationStrategy.SHARED_SCHEMA_BASIC;
-        }
-
-        // Default to row-level security
-        return TenantIsolationStrategy.SHARED_SCHEMA_ROW_LEVEL;
-    }
-
-    /**
-     * Determines the connection pool size based on organization type and plan.
-     */
-    private int determinePoolSize(Tenant tenant) {
-        return switch (tenant.getOrganizationType()) {
-            case GOVERNMENT_AGENCY, FINANCIAL_INSTITUTION -> 50;
-            case CORPORATION, HEALTHCARE -> 30;
-            case ACADEMIC_INSTITUTION -> 25;
-            case RESEARCH_ORGANIZATION -> 15;
-            case NON_PROFIT, STARTUP -> 10;
-            case INDIVIDUAL -> 5;
-        };
-    }
-
-    /**
-     * Determines the database server for the tenant based on region.
-     */
-    private String getDatabaseServer(Tenant tenant) {
-        // This would typically be determined by data residency requirements
-        String region = tenant.getDataResidencyRegion();
-        if (region != null) {
-            return switch (region) {
-                case "US-EAST" -> "db-us-east.nnipa.cloud";
-                case "US-WEST" -> "db-us-west.nnipa.cloud";
-                case "EU" -> "db-eu.nnipa.cloud";
-                case "ASIA" -> "db-asia.nnipa.cloud";
-                default -> "db-default.nnipa.cloud";
-            };
-        }
-        return "localhost"; // Default for development
-    }
-
-    /**
-     * Sanitizes name for use in database/schema names.
-     */
-    private String sanitizeName(String name) {
-        return name.replaceAll("[^a-zA-Z0-9_]", "_")
-                .replaceAll("_{2,}", "_")
-                .toLowerCase();
-    }
-
-    /**
-     * Generates a secure password for database access.
-     */
-    private String generateSecurePassword() {
-        // In production, use a secure password generator
-        return UUID.randomUUID().toString().replace("-", "");
-    }
-
-    /**
-     * Determines if tenant should be auto-activated.
-     */
-    private boolean shouldAutoActivate(Tenant tenant) {
-        // Auto-activate for certain organization types in development
-        return tenant.getOrganizationType() == OrganizationType.INDIVIDUAL ||
-                tenant.getStatus() == TenantStatus.TRIAL;
     }
 
     /**
@@ -278,38 +175,36 @@ public class TenantProvisioningService {
      */
     @Transactional
     public void deprovisionTenant(Tenant tenant) {
-        try {
-            log.info("Starting tenant deprovisioning for: {}", tenant.getName());
+        log.warn("Deprovisioning tenant: {}", tenant.getName());
 
+        try {
             switch (tenant.getIsolationStrategy()) {
                 case DATABASE_PER_TENANT -> {
-                    // Remove data source from pool
-                    dataSourceConfig.removeTenantDataSource(tenant.getId().toString());
-                    log.info("Removed data source for tenant: {}", tenant.getId());
-                    // Note: Actual database deletion would be handled externally
+                    if (tenant.getDatabaseName() != null) {
+                        log.warn("Dropping database: {}", tenant.getDatabaseName());
+                        databaseService.dropDatabase(tenant.getDatabaseName());
+                    }
                 }
                 case SCHEMA_PER_TENANT, HYBRID_POOL -> {
-                    // Drop schema (with caution)
                     if (tenant.getSchemaName() != null) {
+                        log.warn("Dropping schema: {}", tenant.getSchemaName());
                         schemaService.dropSchema(tenant.getSchemaName());
-                        log.info("Dropped schema for tenant: {}", tenant.getId());
                     }
                 }
                 case SHARED_SCHEMA_ROW_LEVEL, SHARED_SCHEMA_BASIC -> {
-                    // Data remains in shared tables, marked as deleted via soft delete
-                    log.info("Tenant data retained in shared schema (soft delete): {}", tenant.getId());
+                    // Data will be deleted via cascade delete on tenant record
+                    log.info("Tenant data will be removed via cascade delete");
                 }
             }
 
-            // Update tenant status
-            tenant.setStatus(TenantStatus.DELETED);
-            tenant.softDelete("SYSTEM");
+            tenant.setStatus(TenantStatus.DEPROVISIONED);
+            tenant.setDeprovisionedAt(Instant.now());
             tenantRepository.save(tenant);
 
-            log.info("Tenant deprovisioning completed for: {}", tenant.getName());
+            log.info("Tenant deprovisioned: {}", tenant.getName());
 
         } catch (Exception e) {
-            log.error("Error deprovisioning tenant: {}", tenant.getName(), e);
+            log.error("Failed to deprovision tenant: {}", tenant.getName(), e);
             throw new TenantProvisioningException("Failed to deprovision tenant", e);
         }
     }
@@ -319,48 +214,226 @@ public class TenantProvisioningService {
      */
     @Transactional
     public void migrateTenantIsolation(Tenant tenant, TenantIsolationStrategy newStrategy) {
-        try {
-            log.info("Migrating tenant {} from {} to {}",
-                    tenant.getName(), tenant.getIsolationStrategy(), newStrategy);
+        log.info("Migrating tenant {} from {} to {}",
+                tenant.getName(), tenant.getIsolationStrategy(), newStrategy);
 
+        try {
             TenantIsolationStrategy oldStrategy = tenant.getIsolationStrategy();
 
-            // Step 1: Set tenant to migrating status
-            tenant.setStatus(TenantStatus.MIGRATING);
-            tenantRepository.save(tenant);
-
-            // Step 2: Provision new resources
+            // Step 1: Create new resources
             tenant.setIsolationStrategy(newStrategy);
-            provisionDataResources(tenant);
+            String sanitizedName = sanitizeName(tenant.getTenantCode());
 
-            // Step 3: Migrate data (would typically be handled by ETL process)
-            // This is a placeholder - actual implementation would involve data migration
-            log.info("Data migration would occur here from {} to {}", oldStrategy, newStrategy);
-
-            // Step 4: Clean up old resources
-            if (oldStrategy == TenantIsolationStrategy.SCHEMA_PER_TENANT &&
-                    tenant.getSchemaName() != null) {
-                // Schedule cleanup after data verification
-                log.info("Old schema {} marked for cleanup", tenant.getSchemaName());
+            switch (newStrategy) {
+                case DATABASE_PER_TENANT -> {
+                    String dbName = "nnipa_" + sanitizedName.toLowerCase();
+                    tenant.setDatabaseName(dbName);
+                    databaseService.createDatabase(dbName, tenant.getId());
+                }
+                case SCHEMA_PER_TENANT, HYBRID_POOL -> {
+                    String schemaName = "tenant_" + sanitizedName.toLowerCase();
+                    tenant.setSchemaName(schemaName);
+                    schemaService.createSchema(schemaName);
+                }
             }
 
-            // Step 5: Update tenant status
-            tenant.setStatus(TenantStatus.ACTIVE);
-            tenant.setIsolationStrategy(newStrategy);
+            // Step 2: Migrate data (would need to implement data migration logic)
+            // This is a placeholder - actual implementation would copy data
+            log.info("Data migration would happen here");
+
+            // Step 3: Clean up old resources
+            switch (oldStrategy) {
+                case DATABASE_PER_TENANT -> {
+                    if (tenant.getDatabaseName() != null) {
+                        databaseService.dropDatabase(tenant.getDatabaseName());
+                    }
+                }
+                case SCHEMA_PER_TENANT, HYBRID_POOL -> {
+                    if (tenant.getSchemaName() != null) {
+                        schemaService.dropSchema(tenant.getSchemaName());
+                    }
+                }
+            }
+
+            // Step 4: Update tenant
+            tenant.setMigratedAt(Instant.now());
             tenantRepository.save(tenant);
 
-            log.info("Tenant isolation migration completed for: {}", tenant.getName());
+            log.info("Tenant migration completed successfully");
 
         } catch (Exception e) {
-            log.error("Error migrating tenant isolation: {}", tenant.getName(), e);
-            tenant.setStatus(TenantStatus.ACTIVE); // Rollback to active
-            tenantRepository.save(tenant);
+            log.error("Failed to migrate tenant isolation", e);
             throw new TenantProvisioningException("Failed to migrate tenant isolation", e);
         }
     }
 
     /**
-     * Custom exception for provisioning errors.
+     * Validates if provisioning is successful.
+     */
+    public boolean validateProvisioning(Tenant tenant) {
+        try {
+            switch (tenant.getIsolationStrategy()) {
+                case DATABASE_PER_TENANT -> {
+                    return databaseService.databaseExists(tenant.getDatabaseName());
+                }
+                case SCHEMA_PER_TENANT, HYBRID_POOL -> {
+                    return schemaService.schemaExists(tenant.getSchemaName());
+                }
+                case SHARED_SCHEMA_ROW_LEVEL, SHARED_SCHEMA_BASIC -> {
+                    return true; // Always valid for shared schemas
+                }
+                default -> {
+                    return false;
+                }
+            }
+        } catch (Exception e) {
+            log.error("Error validating provisioning for tenant: {}", tenant.getName(), e);
+            return false;
+        }
+    }
+
+    /**
+     * Gets provisioning status for a tenant.
+     */
+    public ProvisioningStatus getProvisioningStatus(UUID tenantId) {
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new TenantNotFoundException("Tenant not found: " + tenantId));
+
+        boolean isProvisioned = validateProvisioning(tenant);
+
+        return ProvisioningStatus.builder()
+                .tenantId(tenantId)
+                .status(tenant.getStatus())
+                .isolationStrategy(tenant.getIsolationStrategy())
+                .isProvisioned(isProvisioned)
+                .databaseName(tenant.getDatabaseName())
+                .schemaName(tenant.getSchemaName())
+                .provisionedAt(tenant.getProvisionedAt())
+                .build();
+    }
+
+    /**
+     * Determines the appropriate isolation strategy based on organization type.
+     */
+    private TenantIsolationStrategy determineIsolationStrategy(
+            OrganizationType orgType, boolean hasComplianceRequirements) {
+
+        // High security organizations
+        if (orgType == OrganizationType.GOVERNMENT_AGENCY ||
+                orgType == OrganizationType.FINANCIAL_INSTITUTION) {
+            return TenantIsolationStrategy.DATABASE_PER_TENANT;
+        }
+
+        // Healthcare with compliance
+        if (orgType == OrganizationType.HEALTHCARE && hasComplianceRequirements) {
+            return TenantIsolationStrategy.DATABASE_PER_TENANT;
+        }
+
+        // Medium security organizations
+        if (orgType == OrganizationType.CORPORATION ||
+                orgType == OrganizationType.ACADEMIC_INSTITUTION ||
+                orgType == OrganizationType.HEALTHCARE) {
+            return TenantIsolationStrategy.SCHEMA_PER_TENANT;
+        }
+
+        // Lower security organizations
+        if (orgType == OrganizationType.RESEARCH_ORGANIZATION ||
+                orgType == OrganizationType.NON_PROFIT ||
+                orgType == OrganizationType.STARTUP) {
+            return TenantIsolationStrategy.SHARED_SCHEMA_ROW_LEVEL;
+        }
+
+        // Individual users
+        if (orgType == OrganizationType.INDIVIDUAL) {
+            return TenantIsolationStrategy.SHARED_SCHEMA_BASIC;
+        }
+
+        // Default to row-level security
+        return TenantIsolationStrategy.SHARED_SCHEMA_ROW_LEVEL;
+    }
+
+    /**
+     * Determines if a strategy requires provisioning.
+     */
+    private boolean requiresProvisioning(TenantIsolationStrategy strategy) {
+        return strategy == TenantIsolationStrategy.DATABASE_PER_TENANT ||
+                strategy == TenantIsolationStrategy.SCHEMA_PER_TENANT ||
+                strategy == TenantIsolationStrategy.HYBRID_POOL;
+    }
+
+    /**
+     * Determines if tenant should be auto-activated.
+     */
+    private boolean shouldAutoActivate(Tenant tenant) {
+        if (!autoActivate) {
+            return false;
+        }
+
+        // Auto-activate individuals and startups
+        return tenant.getOrganizationType() == OrganizationType.INDIVIDUAL ||
+                tenant.getOrganizationType() == OrganizationType.STARTUP;
+    }
+
+    /**
+     * Activates a tenant.
+     */
+    private void activateTenant(Tenant tenant) {
+        tenant.setStatus(TenantStatus.ACTIVE);
+        tenant.setActivatedAt(Instant.now());
+        tenant.setIsVerified(true);
+        tenant.setVerifiedAt(Instant.now());
+        tenantRepository.save(tenant);
+        log.info("Tenant activated: {}", tenant.getName());
+    }
+
+    /**
+     * Gets the database server for a tenant.
+     */
+    private String getDatabaseServer(Tenant tenant) {
+        // In production, this could return different servers based on region/load
+        return "localhost";
+    }
+
+    /**
+     * Determines the connection pool size based on tenant.
+     */
+    private int determinePoolSize(Tenant tenant) {
+        return switch (tenant.getOrganizationType()) {
+            case GOVERNMENT_AGENCY, FINANCIAL_INSTITUTION -> 20;
+            case CORPORATION, HEALTHCARE -> 15;
+            case ACADEMIC_INSTITUTION, RESEARCH_ORGANIZATION -> 10;
+            case NON_PROFIT, STARTUP -> 5;
+            case INDIVIDUAL -> 2;
+        };
+    }
+
+    /**
+     * Sanitizes a name for use in database/schema names.
+     */
+    private String sanitizeName(String name) {
+        return name.toLowerCase()
+                .replaceAll("[^a-z0-9_]", "_")
+                .replaceAll("_{2,}", "_")
+                .replaceAll("^_|_$", "");
+    }
+
+    /**
+     * DTO for provisioning status.
+     */
+    @lombok.Builder
+    @lombok.Data
+    public static class ProvisioningStatus {
+        private UUID tenantId;
+        private TenantStatus status;
+        private TenantIsolationStrategy isolationStrategy;
+        private boolean isProvisioned;
+        private String databaseName;
+        private String schemaName;
+        private Instant provisionedAt;
+    }
+
+    /**
+     * Custom exceptions.
      */
     public static class TenantProvisioningException extends RuntimeException {
         public TenantProvisioningException(String message) {
@@ -369,6 +442,12 @@ public class TenantProvisioningService {
 
         public TenantProvisioningException(String message, Throwable cause) {
             super(message, cause);
+        }
+    }
+
+    public static class TenantNotFoundException extends RuntimeException {
+        public TenantNotFoundException(String message) {
+            super(message);
         }
     }
 }

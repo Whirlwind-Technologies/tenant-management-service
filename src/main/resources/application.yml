@@ -201,10 +201,30 @@ app:
     # Default tenant isolation strategy for new tenants
     default-isolation-strategy: SHARED_SCHEMA_ROW_LEVEL
 
-    # Schema management
+    # Provisioning Configuration
+    provisioning:
+      auto-activate: false  # Auto-activate after provisioning
+      async-provisioning: true  # Use async for long-running operations
+      retry-max-attempts: 3
+      retry-delay-seconds: 60
+
+    # Database provisioning settings
+    database:
+      host: ${DB_HOST:localhost}
+      port: ${DB_PORT:5432}
+      admin-username: ${DB_ADMIN_USERNAME:postgres}
+      admin-password: ${DB_ADMIN_PASSWORD:postgres}
+
+      # Connection pool settings per isolation strategy
+      pool-size:
+        database-per-tenant: 20
+        schema-per-tenant: 15
+        shared-schema: 50
+
+    # Schema provisioning settings
     schema:
-      prefix: "tenant_"
-      template: "tenant_template"
+      prefix: tenant_
+      template: tenant_template
 
     # Subscription defaults
     subscription:
@@ -250,3 +270,32 @@ app:
         compliance-frameworks:
           - GDPR
         data-retention-days: 365   # 1 year
+
+  # Async processing configuration
+  async:
+    core-pool-size: 4
+    max-pool-size: 10
+    queue-capacity: 100
+    thread-name-prefix: nnipa-async-
+
+  # Encryption for database passwords
+  encryption:
+    key: ${ENCRYPTION_KEY:DefaultEncryptionKey123}  # Change in production!
+
+  # Spring async configuration
+  task:
+    execution:
+      pool:
+        core-size: 4
+        max-size: 10
+        queue-capacity: 100
+    scheduling:
+      pool:
+        size: 2
+
+  # Add logging for provisioning
+  logging:
+    level:
+      com.nnipa.tenant.service.TenantProvisioningService: DEBUG
+      com.nnipa.tenant.service.SchemaManagementService: DEBUG
+      com.nnipa.tenant.service.DatabaseProvisioningService: DEBUG

@@ -3,13 +3,13 @@ package com.nnipa.tenant.service;
 import com.nnipa.tenant.client.NotificationServiceClient;
 import com.nnipa.tenant.entity.Tenant;
 import com.nnipa.tenant.entity.TenantSettings;
+import com.nnipa.tenant.enums.ComplianceFramework;
 import com.nnipa.tenant.enums.OrganizationType;
 import com.nnipa.tenant.enums.TenantStatus;
 import com.nnipa.tenant.repository.TenantRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -27,52 +27,69 @@ public class TenantService {
     private final OrganizationClassificationService classificationService;
     private final TenantSettingsService settingsService;
     private final NotificationServiceClient notificationClient;
+    private final TenantProvisioningService provisioningService;
 
     @Transactional
     public Tenant createTenant(Tenant tenant) {
         log.info("Creating new tenant: {}", tenant.getName());
 
-        // Auto-classify organization type if not provided
-        if (tenant.getOrganizationType() == null) {
-            OrganizationType detectedType = classificationService.detectOrganizationType(
-                    tenant.getOrganizationEmail(),
-                    tenant.getName(),
-                    tenant.getTaxId()
-            );
-            tenant.setOrganizationType(detectedType);
+        try {
+            // Step 1: Validate tenant data
+            validateTenantCreation(tenant);
+
+            // Step 2: Auto-classify organization type if not provided
+            if (tenant.getOrganizationType() == null) {
+                OrganizationType detectedType = classificationService.detectOrganizationType(
+                        tenant.getOrganizationEmail(),
+                        tenant.getName(),
+                        tenant.getTaxId()
+                );
+                tenant.setOrganizationType(detectedType);
+            }
+
+            // Step 3: Set compliance frameworks based on organization type
+            if (tenant.getComplianceFrameworks() == null || tenant.getComplianceFrameworks().isEmpty()) {
+                tenant.setComplianceFrameworks(
+                        classificationService.assignComplianceFrameworks(tenant.getOrganizationType())
+                );
+            }
+
+            // Step 4: Set initial status
+            tenant.setStatus(TenantStatus.PENDING_VERIFICATION);
+
+            // Step 5: Generate unique tenant code if not provided
+            if (tenant.getTenantCode() == null) {
+                tenant.setTenantCode(generateTenantCode(tenant));
+            }
+
+            // Step 6: Provision the tenant (includes database/schema creation)
+            tenant = provisioningService.provisionTenant(tenant);
+
+            // Step 7: Create default settings
+            TenantSettings settings = settingsService.createDefaultSettings(tenant);
+            tenant.setSettings(settings);
+
+            // Step 8: Send notification asynchronously
+            sendTenantCreatedNotification(tenant);
+
+            log.info("Tenant created successfully: {} (ID: {}, Status: {})",
+                    tenant.getName(), tenant.getId(), tenant.getStatus());
+
+            return tenant;
+
+        } catch (DuplicateTenantException e) {
+            log.error("Duplicate tenant detected: {}", e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            log.error("Failed to create tenant: {}", tenant.getName(), e);
+
+            // Attempt rollback if tenant was partially created
+            if (tenant.getId() != null) {
+                rollbackTenantCreation(tenant);
+            }
+
+            throw new TenantCreationException("Failed to create tenant: " + e.getMessage(), e);
         }
-
-        // Set defaults
-        tenant.setStatus(TenantStatus.PENDING_VERIFICATION);
-        tenant.setIsolationStrategy(classificationService.determineIsolationStrategy(
-                tenant.getOrganizationType()));
-
-        // Generate unique tenant code if not provided
-        if (tenant.getTenantCode() == null) {
-            tenant.setTenantCode(generateTenantCode(tenant));
-        }
-
-        // Save tenant
-        tenant = tenantRepository.save(tenant);
-
-        // Create default settings
-        TenantSettings settings = settingsService.createDefaultSettings(tenant);
-        tenant.setSettings(settings);
-
-        // Send notification asynchronously
-        final UUID tenantId = tenant.getId();
-        notificationClient.sendNotification(
-                tenantId,
-                NotificationServiceClient.NotificationType.TENANT_ACTIVATED,
-                Map.of(
-                        "tenantName", tenant.getName(),
-                        "organizationType", tenant.getOrganizationType().toString()
-                )
-        );
-
-        log.info("Tenant created successfully: {} (ID: {})",
-                tenant.getName(), tenant.getId());
-        return tenant;
     }
 
     @Transactional
@@ -202,11 +219,11 @@ public class TenantService {
         Tenant tenant = tenantRepository.findById(id)
                 .orElseThrow(() -> new TenantNotFoundException("Tenant not found: " + id));
 
-        if (!tenant.getStatus().canTransitionTo(TenantStatus.PENDING_DELETION)) {
+        if (!tenant.getStatus().canTransitionTo(TenantStatus.MARKED_FOR_DELETION)) {
             throw new IllegalStateException("Cannot delete tenant in status: " + tenant.getStatus());
         }
 
-        tenant.setStatus(TenantStatus.PENDING_DELETION);
+        tenant.setStatus(TenantStatus.MARKED_FOR_DELETION);
         tenant.setMarkedForDeletionAt(Instant.now());
         tenantRepository.save(tenant);
 
@@ -320,5 +337,152 @@ public class TenantService {
         public long getTotalTenants() { return totalTenants; }
         public long getActiveTenants() { return activeTenants; }
         public Map<OrganizationType, Long> getStatisticsByType() { return statisticsByType; }
+    }
+
+    /**
+     * Validates tenant creation request.
+     */
+    private void validateTenantCreation(Tenant tenant) {
+        // Check for duplicate tenant code
+        if (tenant.getTenantCode() != null) {
+            if (tenantRepository.existsByTenantCode(tenant.getTenantCode())) {
+                throw new DuplicateTenantException("Tenant code already exists: " + tenant.getTenantCode());
+            }
+        }
+
+        // Check for duplicate organization email
+        if (tenant.getOrganizationEmail() != null) {
+            if (tenantRepository.existsByOrganizationEmail(tenant.getOrganizationEmail())) {
+                throw new DuplicateTenantException("Organization email already registered: " +
+                        tenant.getOrganizationEmail());
+            }
+        }
+
+        // Validate organization type specific requirements
+        validateOrganizationRequirements(tenant);
+    }
+
+    /**
+     * Validates organization-specific requirements.
+     */
+    private void validateOrganizationRequirements(Tenant tenant) {
+        OrganizationType orgType = tenant.getOrganizationType();
+
+        if (orgType == OrganizationType.GOVERNMENT_AGENCY) {
+            if (tenant.getTaxId() == null || tenant.getTaxId().isEmpty()) {
+                throw new ValidationException("Government agencies must provide a tax ID");
+            }
+        }
+
+        if (orgType == OrganizationType.HEALTHCARE) {
+            if (!tenant.getComplianceFrameworks().contains(ComplianceFramework.HIPAA)) {
+                log.warn("Healthcare organization without HIPAA compliance: {}", tenant.getName());
+            }
+        }
+
+        if (orgType == OrganizationType.FINANCIAL_INSTITUTION) {
+            if (tenant.getBusinessLicense() == null || tenant.getBusinessLicense().isEmpty()) {
+                throw new ValidationException("Financial institutions must provide a business license");
+            }
+        }
+    }
+
+    /**
+     * Sends tenant created notification.
+     */
+    private void sendTenantCreatedNotification(Tenant tenant) {
+        try {
+            notificationClient.sendNotification(
+                    tenant.getId(),
+                    NotificationServiceClient.NotificationType.TENANT_ACTIVATED,
+                    Map.of(
+                            "tenantName", tenant.getName(),
+                            "organizationType", tenant.getOrganizationType().toString(),
+                            "isolationStrategy", tenant.getIsolationStrategy().toString(),
+                            "status", tenant.getStatus().toString()
+                    )
+            );
+        } catch (Exception e) {
+            log.error("Failed to send tenant created notification", e);
+            // Don't fail the creation if notification fails
+        }
+    }
+
+    /**
+     * Rollback tenant creation in case of failure.
+     */
+    private void rollbackTenantCreation(Tenant tenant) {
+        try {
+            log.warn("Rolling back tenant creation for: {}", tenant.getName());
+
+            // Deprovision resources
+            if (tenant.getIsolationStrategy() != null) {
+                provisioningService.deprovisionTenant(tenant);
+            }
+
+            // Mark tenant as failed
+            tenant.setStatus(TenantStatus.CREATION_FAILED);
+            tenant.setIsDeleted(true);
+            tenant.setDeletedAt(Instant.now());
+            tenantRepository.save(tenant);
+
+        } catch (Exception e) {
+            log.error("Failed to rollback tenant creation", e);
+        }
+    }
+
+    /**
+     * Gets tenant provisioning status.
+     */
+    public TenantProvisioningService.ProvisioningStatus getProvisioningStatus(UUID tenantId) {
+        return provisioningService.getProvisioningStatus(tenantId);
+    }
+
+    /**
+     * Retries failed provisioning.
+     */
+    @Transactional
+    public Tenant retryProvisioning(UUID tenantId) {
+        log.info("Retrying provisioning for tenant: {}", tenantId);
+
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new TenantNotFoundException("Tenant not found: " + tenantId));
+
+        if (tenant.getStatus() != TenantStatus.PROVISIONING_FAILED &&
+                tenant.getStatus() != TenantStatus.CREATION_FAILED) {
+            throw new IllegalStateException("Tenant is not in failed state: " + tenant.getStatus());
+        }
+
+        // Reset status and retry
+        tenant.setStatus(TenantStatus.PENDING_VERIFICATION);
+        tenant = provisioningService.provisionTenant(tenant);
+
+        log.info("Provisioning retry completed for tenant: {}", tenant.getName());
+        return tenant;
+    }
+
+    /**
+     * Custom exceptions.
+     */
+    public static class DuplicateTenantException extends RuntimeException {
+        public DuplicateTenantException(String message) {
+            super(message);
+        }
+    }
+
+    public static class TenantCreationException extends RuntimeException {
+        public TenantCreationException(String message) {
+            super(message);
+        }
+
+        public TenantCreationException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
+    public static class ValidationException extends RuntimeException {
+        public ValidationException(String message) {
+            super(message);
+        }
     }
 }

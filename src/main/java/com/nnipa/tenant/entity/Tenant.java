@@ -221,6 +221,32 @@ public class Tenant extends BaseEntity {
     @Column(name = "tags", columnDefinition = "TEXT")
     private String tags; // Comma-separated tags for categorization
 
+    // Provisioning Information
+    @Column(name = "provisioned_at")
+    private Instant provisionedAt;
+
+    @Column(name = "provisioned_by")
+    private String provisionedBy;
+
+    @Column(name = "deprovisioned_at")
+    private Instant deprovisionedAt;
+
+    @Column(name = "migrated_at")
+    private Instant migratedAt;
+
+    @Column(name = "last_provisioning_error")
+    private String lastProvisioningError;
+
+    @Column(name = "provisioning_retry_count")
+    private Integer provisioningRetryCount = 0;
+
+    // Database credentials (encrypted)
+    @Column(name = "database_username")
+    private String databaseUsername;
+
+    @Column(name = "encrypted_database_password")
+    private String encryptedDatabasePassword;
+
     // Helper Methods
 
     /**

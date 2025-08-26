@@ -17,6 +17,34 @@ public enum TenantStatus {
             false
     ),
 
+    PROVISIONING(
+            "Provisioning",
+            "Tenant provisioning process started",
+            false,
+            true
+    ),
+
+    DATABASE_CREATED(
+            "Database Created",
+            "Tenant database has been created",
+            false,
+            true
+    ),
+
+    SCHEMA_CREATED(
+            "Schema Created",
+            "Tenant schema has been created",
+            false,
+            true
+    ),
+
+    READY(
+            "Ready",
+            "Tenant is ready for use (shared schema with row-level security, no provisioning needed)",
+            true,
+            true
+    ),
+
     ACTIVE(
             "Active",
             "Tenant is active and fully operational",
@@ -38,22 +66,15 @@ public enum TenantStatus {
             true
     ),
 
-    INACTIVE(
-            "Inactive",
+    DEACTIVATED(
+            "Deactivated",
             "Tenant voluntarily deactivated",
             false,
             true
     ),
 
-    EXPIRED(
-            "Expired",
-            "Tenant subscription or trial has expired",
-            false,
-            true
-    ),
-
-    PENDING_DELETION(
-            "Pending Deletion",
+    MARKED_FOR_DELETION(
+            "Marked for Deletion",
             "Tenant marked for deletion, in grace period",
             false,
             true
@@ -66,18 +87,25 @@ public enum TenantStatus {
             false
     ),
 
-    MIGRATING(
-            "Migrating",
-            "Tenant data is being migrated",
+    PROVISIONING_FAILED(
+            "Provisioning Failed",
+            "Tenant provisioning failed during setup",
             false,
-            true
+            false
     ),
 
-    LOCKED(
-            "Locked",
-            "Tenant locked due to security concern",
+    CREATION_FAILED(
+            "Creation Failed",
+            "Tenant creation failed",
             false,
-            true
+            false
+    ),
+
+    DEPROVISIONED(
+            "Deprovisioned",
+            "Tenant resources have been deprovisioned",
+            false,
+            false
     );
 
     private final String displayName;
@@ -89,82 +117,34 @@ public enum TenantStatus {
      * Checks if transition to another status is valid.
      */
     public boolean canTransitionTo(TenantStatus newStatus) {
-        if (this == newStatus) return false;
-
         return switch (this) {
-            case PENDING_VERIFICATION ->
+            case PENDING_VERIFICATION -> newStatus == PROVISIONING ||
                     newStatus == ACTIVE ||
-                            newStatus == TRIAL ||
-                            newStatus == DELETED;
-
-            case ACTIVE ->
+                    newStatus == PROVISIONING_FAILED;
+            case PROVISIONING -> newStatus == DATABASE_CREATED ||
+                    newStatus == SCHEMA_CREATED ||
+                    newStatus == READY ||
+                    newStatus == PROVISIONING_FAILED;
+            case DATABASE_CREATED, SCHEMA_CREATED, READY -> newStatus == ACTIVE ||
+                    newStatus == TRIAL;
+            case PROVISIONING_FAILED, CREATION_FAILED -> newStatus == PENDING_VERIFICATION ||
+                    newStatus == PROVISIONING ||
+                    newStatus == MARKED_FOR_DELETION;
+            case ACTIVE -> newStatus == SUSPENDED ||
+                    newStatus == DEACTIVATED ||
+                    newStatus == MARKED_FOR_DELETION;
+            case TRIAL -> newStatus == ACTIVE ||
                     newStatus == SUSPENDED ||
-                            newStatus == INACTIVE ||
-                            newStatus == EXPIRED ||
-                            newStatus == PENDING_DELETION ||
-                            newStatus == MIGRATING ||
-                            newStatus == LOCKED;
-
-            case TRIAL ->
-                    newStatus == ACTIVE ||
-                            newStatus == EXPIRED ||
-                            newStatus == SUSPENDED ||
-                            newStatus == DELETED;
-
-            case SUSPENDED ->
-                    newStatus == ACTIVE ||
-                            newStatus == PENDING_DELETION ||
-                            newStatus == DELETED;
-
-            case INACTIVE ->
-                    newStatus == ACTIVE ||
-                            newStatus == PENDING_DELETION ||
-                            newStatus == DELETED;
-
-            case EXPIRED ->
-                    newStatus == ACTIVE ||
-                            newStatus == PENDING_DELETION ||
-                            newStatus == DELETED;
-
-            case PENDING_DELETION ->
-                    newStatus == ACTIVE ||
-                            newStatus == DELETED;
-
-            case DELETED -> false; // Cannot transition from deleted
-
-            case MIGRATING ->
-                    newStatus == ACTIVE ||
-                            newStatus == SUSPENDED;
-
-            case LOCKED ->
-                    newStatus == ACTIVE ||
-                            newStatus == SUSPENDED ||
-                            newStatus == DELETED;
-        };
-    }
-
-    /**
-     * Determines if this status requires immediate attention.
-     */
-    public boolean requiresAttention() {
-        return this == SUSPENDED ||
-                this == EXPIRED ||
-                this == PENDING_DELETION ||
-                this == LOCKED;
-    }
-
-    /**
-     * Gets the maximum days a tenant can remain in this status.
-     */
-    public Integer getMaxDurationDays() {
-        return switch (this) {
-            case PENDING_VERIFICATION -> 7;
-            case TRIAL -> 30;
-            case SUSPENDED -> 30;
-            case EXPIRED -> 30;
-            case PENDING_DELETION -> 30;
-            case MIGRATING -> 1;
-            default -> null; // No limit
+                    newStatus == DEACTIVATED;
+            case SUSPENDED -> newStatus == ACTIVE ||
+                    newStatus == DEACTIVATED ||
+                    newStatus == MARKED_FOR_DELETION;
+            case DEACTIVATED -> newStatus == ACTIVE ||
+                    newStatus == MARKED_FOR_DELETION;
+            case MARKED_FOR_DELETION -> newStatus == DELETED ||
+                    newStatus == DEPROVISIONED;
+            case DEPROVISIONED -> newStatus == DELETED;
+            case DELETED -> false;
         };
     }
 }
