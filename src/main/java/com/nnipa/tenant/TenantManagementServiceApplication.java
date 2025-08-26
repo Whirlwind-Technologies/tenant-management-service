@@ -9,16 +9,13 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
 import org.springframework.web.client.RestTemplate;
 
 /**
  * Main application class for the Tenant Management Service.
- * This service provides multi-tenant configuration and provisioning for the NNIPA platform,
- * supporting diverse organization types including government agencies, corporations,
- * academic institutions, and individual users.
+ * Authentication handled by auth-service, authorization by authz-service,
+ * rate limiting by api-gateway, notifications by notification-service.
  */
 @Slf4j
 @SpringBootApplication
@@ -38,25 +35,27 @@ public class TenantManagementServiceApplication {
 		log.info("- Government Agencies");
 		log.info("- Corporations");
 		log.info("- Academic Institutions");
+		log.info("- Healthcare Organizations");
+		log.info("- Financial Institutions");
+		log.info("- Non-Profits");
+		log.info("- Startups");
+		log.info("- Research Organizations");
 		log.info("- Individual Users");
+		log.info("===========================================");
+		log.info("Integration Points:");
+		log.info("- Authentication: auth-service");
+		log.info("- Authorization: authz-service");
+		log.info("- Rate Limiting: api-gateway");
+		log.info("- Notifications: notification-service");
 		log.info("===========================================");
 	}
 
 	/**
 	 * RestTemplate bean for inter-service communication.
-	 * Will be enhanced with circuit breakers and retry logic.
+	 * Enhanced with circuit breakers and retry logic via Resilience4j.
 	 */
 	@Bean
 	public RestTemplate restTemplate() {
 		return new RestTemplate();
-	}
-
-	/**
-	 * Password encoder for secure password storage.
-	 * Using BCrypt for production-ready security.
-	 */
-	@Bean
-	public PasswordEncoder passwordEncoder() {
-		return new BCryptPasswordEncoder();
 	}
 }

@@ -1,142 +1,140 @@
 package com.nnipa.tenant.service;
 
-import com.nnipa.tenant.entity.BillingDetails;
-import com.nnipa.tenant.entity.Subscription;
-import com.nnipa.tenant.entity.Tenant;
-import com.nnipa.tenant.entity.UsageRecord;
-import com.nnipa.tenant.enums.OrganizationType;
+import com.nnipa.tenant.client.NotificationServiceClient;
+import com.nnipa.tenant.dto.request.RecordUsageRequest;
+import com.nnipa.tenant.entity.*;
 import com.nnipa.tenant.enums.SubscriptionPlan;
-import com.nnipa.tenant.enums.TenantStatus;
-import com.nnipa.tenant.repository.BillingDetailsRepository;
 import com.nnipa.tenant.repository.SubscriptionRepository;
-import com.nnipa.tenant.repository.TenantRepository;
 import com.nnipa.tenant.repository.UsageRecordRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
-import java.util.List;
-import java.util.Optional;
-import java.util.UUID;
+import java.util.*;
 
 /**
- * Service for managing tenant subscriptions and billing.
- * Handles plan changes, billing cycles, and usage-based pricing.
+ * Service for managing subscriptions and billing.
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
-@Transactional(readOnly = true)
 public class SubscriptionService {
 
     private final SubscriptionRepository subscriptionRepository;
-    private final TenantRepository tenantRepository;
-    private final BillingDetailsRepository billingDetailsRepository;
     private final UsageRecordRepository usageRecordRepository;
-    private final NotificationService notificationService;
+    private final NotificationServiceClient notificationClient;
 
     /**
      * Creates a new subscription for a tenant.
      */
     @Transactional
-    @CacheEvict(value = "subscriptions", key = "#tenant.id")
     public Subscription createSubscription(Tenant tenant, SubscriptionPlan plan, BillingDetails billingDetails) {
         log.info("Creating subscription for tenant: {} with plan: {}", tenant.getName(), plan);
 
-        // Check if tenant already has an active subscription
+        // Check for existing active subscription
         Optional<Subscription> existing = subscriptionRepository.findByTenantAndActiveStatus(tenant);
         if (existing.isPresent()) {
-            throw new SubscriptionAlreadyExistsException("Tenant already has an active subscription");
+            throw new IllegalStateException("Tenant already has an active subscription");
         }
 
-        // Create subscription
         Subscription subscription = Subscription.builder()
                 .tenant(tenant)
                 .plan(plan)
                 .subscriptionStatus("ACTIVE")
                 .startDate(Instant.now())
                 .currency("USD")
-                .billingCycle(determineBillingCycle(tenant, plan))
+                .billingCycle(plan == SubscriptionPlan.GOVERNMENT ? "ANNUAL" : "MONTHLY")
+                .monthlyPrice(plan.getBaseMonthlyPrice())
                 .autoRenew(true)
                 .build();
 
-        // Set pricing based on organization type and plan
-        setPricing(subscription, tenant.getOrganizationType(), plan);
-
-        // Set trial period if applicable
-        if (shouldHaveTrial(tenant, plan)) {
-            setTrialPeriod(subscription, tenant.getOrganizationType());
+        // Set trial if applicable
+        if (plan.getTrialDays() > 0) {
+            subscription.setTrialStartDate(Instant.now());
+            subscription.setTrialEndDate(Instant.now().plus(plan.getTrialDays(), ChronoUnit.DAYS));
         }
 
-        // Set renewal date
+        // Set next renewal date
         subscription.setNextRenewalDate(calculateNextRenewalDate(subscription));
 
-        // Save subscription
-        subscription = subscriptionRepository.save(subscription);
+        // Apply organization-specific discounts
+        applyOrganizationDiscounts(subscription, tenant);
 
-        // Save billing details
+        // Set billing details
         if (billingDetails != null) {
             billingDetails.setSubscription(subscription);
-            billingDetailsRepository.save(billingDetails);
             subscription.setBillingDetails(billingDetails);
         }
 
-        // Update tenant with subscription
-        tenant.setSubscription(subscription);
-        tenantRepository.save(tenant);
+        subscription = subscriptionRepository.save(subscription);
 
-        // Send welcome notification
-        notificationService.sendSubscriptionCreated(tenant, subscription);
+        // Send notification
+        notificationClient.sendNotification(
+                tenant.getId(),
+                NotificationServiceClient.NotificationType.SUBSCRIPTION_CREATED,
+                Map.of("plan", plan.name(), "price", subscription.getMonthlyPrice())
+        );
 
         log.info("Subscription created successfully for tenant: {}", tenant.getName());
         return subscription;
     }
 
     /**
-     * Upgrades or downgrades a subscription plan.
+     * Gets a subscription by ID.
+     */
+    public Optional<Subscription> getSubscriptionById(UUID id) {
+        return subscriptionRepository.findById(id);
+    }
+
+    /**
+     * Gets active subscription for a tenant.
+     */
+    public Optional<Subscription> getTenantActiveSubscription(UUID tenantId) {
+        // This would need to be implemented with proper repository method
+        return subscriptionRepository.findAll().stream()
+                .filter(s -> s.getTenant().getId().equals(tenantId))
+                .filter(s -> "ACTIVE".equals(s.getSubscriptionStatus()))
+                .findFirst();
+    }
+
+    /**
+     * Changes subscription plan.
      */
     @Transactional
-    @CacheEvict(value = "subscriptions", key = "#subscriptionId")
     public Subscription changePlan(UUID subscriptionId, SubscriptionPlan newPlan) {
-        log.info("Changing subscription plan: {} to {}", subscriptionId, newPlan);
+        log.info("Changing plan for subscription: {} to {}", subscriptionId, newPlan);
 
         Subscription subscription = subscriptionRepository.findById(subscriptionId)
-                .orElseThrow(() -> new SubscriptionNotFoundException("Subscription not found"));
+                .orElseThrow(() -> new RuntimeException("Subscription not found"));
 
-        SubscriptionPlan currentPlan = subscription.getPlan();
+        SubscriptionPlan oldPlan = subscription.getPlan();
 
         // Validate plan change
-        if (!currentPlan.canUpgradeTo(newPlan)) {
-            throw new InvalidPlanChangeException(
-                    String.format("Cannot change from %s to %s", currentPlan, newPlan)
-            );
+        if (!canChangePlan(oldPlan, newPlan)) {
+            throw new IllegalStateException("Cannot change from " + oldPlan + " to " + newPlan);
         }
 
-        // Calculate prorated charges/credits
-        BigDecimal proratedAmount = calculateProratedAmount(subscription, newPlan);
-
-        // Update subscription
         subscription.setPlan(newPlan);
-        setPricing(subscription, subscription.getTenant().getOrganizationType(), newPlan);
+        subscription.setMonthlyPrice(newPlan.getBaseMonthlyPrice());
 
-        // Create usage record for plan change
-        createPlanChangeRecord(subscription, currentPlan, newPlan, proratedAmount);
+        // Recalculate discounts
+        applyOrganizationDiscounts(subscription, subscription.getTenant());
 
         subscription = subscriptionRepository.save(subscription);
 
-        // Notify tenant
-        notificationService.sendPlanChanged(subscription.getTenant(), currentPlan, newPlan);
+        // Send notification
+        notificationClient.sendNotification(
+                subscription.getTenant().getId(),
+                NotificationServiceClient.NotificationType.SUBSCRIPTION_CHANGED,
+                Map.of("oldPlan", oldPlan, "newPlan", newPlan)
+        );
 
-        log.info("Subscription plan changed from {} to {}", currentPlan, newPlan);
+        log.info("Plan changed successfully from {} to {}", oldPlan, newPlan);
         return subscription;
     }
 
@@ -144,30 +142,26 @@ public class SubscriptionService {
      * Cancels a subscription.
      */
     @Transactional
-    @CacheEvict(value = "subscriptions", key = "#subscriptionId")
     public Subscription cancelSubscription(UUID subscriptionId, String reason) {
-        log.info("Canceling subscription: {} (Reason: {})", subscriptionId, reason);
+        log.info("Canceling subscription: {} - Reason: {}", subscriptionId, reason);
 
         Subscription subscription = subscriptionRepository.findById(subscriptionId)
-                .orElseThrow(() -> new SubscriptionNotFoundException("Subscription not found"));
+                .orElseThrow(() -> new RuntimeException("Subscription not found"));
 
         subscription.setSubscriptionStatus("CANCELED");
         subscription.setCanceledAt(Instant.now());
         subscription.setCancellationReason(reason);
         subscription.setAutoRenew(false);
-
-        // Set end date to end of current billing period
         subscription.setEndDate(subscription.getNextRenewalDate());
 
         subscription = subscriptionRepository.save(subscription);
 
-        // Update tenant status
-        Tenant tenant = subscription.getTenant();
-        tenant.setStatus(TenantStatus.PENDING_DELETION);
-        tenantRepository.save(tenant);
-
-        // Notify tenant
-        notificationService.sendSubscriptionCanceled(tenant, subscription);
+        // Send notification
+        notificationClient.sendNotification(
+                subscription.getTenant().getId(),
+                NotificationServiceClient.NotificationType.SUBSCRIPTION_CANCELLED,
+                Map.of("reason", reason)
+        );
 
         log.info("Subscription canceled successfully");
         return subscription;
@@ -177,398 +171,224 @@ public class SubscriptionService {
      * Renews a subscription.
      */
     @Transactional
-    @CacheEvict(value = "subscriptions", key = "#subscriptionId")
     public Subscription renewSubscription(UUID subscriptionId) {
         log.info("Renewing subscription: {}", subscriptionId);
 
         Subscription subscription = subscriptionRepository.findById(subscriptionId)
-                .orElseThrow(() -> new SubscriptionNotFoundException("Subscription not found"));
+                .orElseThrow(() -> new RuntimeException("Subscription not found"));
 
         if (!"ACTIVE".equals(subscription.getSubscriptionStatus())) {
-            throw new InvalidSubscriptionStateException("Can only renew active subscriptions");
+            throw new IllegalStateException("Cannot renew inactive subscription");
         }
 
-        // Process payment (would integrate with payment processor)
-        BigDecimal amount = subscription.calculateMonthlyCost();
-        boolean paymentSuccess = processPayment(subscription, amount);
+        subscription.setLastPaymentDate(Instant.now());
+        subscription.setLastPaymentAmount(subscription.getMonthlyPrice());
+        subscription.setNextRenewalDate(calculateNextRenewalDate(subscription));
 
-        if (paymentSuccess) {
-            // Update subscription dates
-            subscription.setLastPaymentDate(Instant.now());
-            subscription.setLastPaymentAmount(amount);
-            subscription.setNextRenewalDate(calculateNextRenewalDate(subscription));
+        subscription = subscriptionRepository.save(subscription);
 
-            // Clear trial if renewing from trial
-            if (subscription.isInTrial()) {
-                subscription.setTrialEndDate(Instant.now());
-            }
+        // Send notification
+        notificationClient.sendNotification(
+                subscription.getTenant().getId(),
+                NotificationServiceClient.NotificationType.SUBSCRIPTION_RENEWED,
+                Map.of("nextRenewalDate", subscription.getNextRenewalDate())
+        );
 
-            subscription = subscriptionRepository.save(subscription);
-
-            // Create usage record for renewal
-            createRenewalRecord(subscription, amount);
-
-            // Notify tenant
-            notificationService.sendSubscriptionRenewed(subscription.getTenant(), subscription);
-
-            log.info("Subscription renewed successfully");
-        } else {
-            // Handle payment failure
-            subscription.setSubscriptionStatus("PAST_DUE");
-            subscription = subscriptionRepository.save(subscription);
-
-            notificationService.sendPaymentFailed(subscription.getTenant(), subscription);
-            log.warn("Subscription renewal failed due to payment issue");
-        }
-
+        log.info("Subscription renewed successfully");
         return subscription;
     }
 
     /**
-     * Records usage for a subscription.
+     * Records usage for a subscription - Fixed version.
+     * Now accepts individual parameters instead of RecordUsageRequest.
      */
     @Transactional
-    public UsageRecord recordUsage(UUID subscriptionId, String metricName, BigDecimal quantity, String unit) {
-        log.debug("Recording usage for subscription: {} - {} {} {}",
-                subscriptionId, quantity, unit, metricName);
+    public UsageRecord recordUsage(UUID subscriptionId, String metricName,
+                                   BigDecimal quantity, String unit) {
+        log.debug("Recording usage: {} {} {} for subscription: {}",
+                quantity, unit, metricName, subscriptionId);
 
         Subscription subscription = subscriptionRepository.findById(subscriptionId)
-                .orElseThrow(() -> new SubscriptionNotFoundException("Subscription not found"));
+                .orElseThrow(() -> new RuntimeException("Subscription not found"));
 
         UsageRecord record = UsageRecord.builder()
                 .subscription(subscription)
                 .usageDate(LocalDate.now())
                 .metricName(metricName)
-                .metricCategory(determineMetricCategory(metricName))
+                .metricCategory(determineCategory(metricName))
                 .quantity(quantity)
                 .unit(unit)
                 .isBillable(true)
                 .recordedAt(Instant.now())
                 .build();
 
-        // Check if usage exceeds limits
-        if (isOverage(subscription, metricName, quantity)) {
-            record.setIsOverage(true);
-            record.setOverageQuantity(calculateOverage(subscription, metricName, quantity));
-            record.setRate(getOverageRate(subscription, metricName));
-        }
-
-        // Calculate amount if billable
-        if (record.getIsBillable()) {
-            record.calculateAmount();
+        // Calculate amount if rate is known
+        BigDecimal rate = getUsageRate(subscription.getPlan(), metricName);
+        if (rate != null) {
+            record.setRate(rate);
+            record.setAmount(quantity.multiply(rate));
         }
 
         record = usageRecordRepository.save(record);
-
-        // Check usage limits and notify if needed
-        checkUsageLimits(subscription, metricName);
-
+        log.debug("Usage recorded successfully");
         return record;
     }
 
     /**
-     * Gets current billing period usage.
+     * Alternative recordUsage method that accepts RecordUsageRequest.
+     * This creates a bridge between the controller and the service.
      */
-    @Cacheable(value = "usage", key = "#subscriptionId")
+    @Transactional
+    public UsageRecord recordUsage(UUID subscriptionId, RecordUsageRequest request) {
+        return recordUsage(
+                subscriptionId,
+                request.getMetricName(),
+                request.getQuantity(),
+                request.getUnit()
+        );
+    }
+
+    /**
+     * Gets usage records for a date range.
+     */
+    public List<UsageRecord> getUsageRecords(UUID subscriptionId, LocalDate startDate, LocalDate endDate) {
+        log.debug("Fetching usage records for subscription: {} from {} to {}",
+                subscriptionId, startDate, endDate);
+
+        Subscription subscription = subscriptionRepository.findById(subscriptionId)
+                .orElseThrow(() -> new RuntimeException("Subscription not found"));
+
+        return usageRecordRepository.findBySubscriptionAndDateRange(subscription, startDate, endDate);
+    }
+
+    /**
+     * Gets current usage statistics.
+     */
     public SubscriptionUsage getCurrentUsage(UUID subscriptionId) {
         log.debug("Getting current usage for subscription: {}", subscriptionId);
 
         Subscription subscription = subscriptionRepository.findById(subscriptionId)
-                .orElseThrow(() -> new SubscriptionNotFoundException("Subscription not found"));
+                .orElseThrow(() -> new RuntimeException("Subscription not found"));
 
         LocalDate startDate = LocalDate.now().withDayOfMonth(1);
-        LocalDate endDate = startDate.plusMonths(1).minusDays(1);
+        LocalDate endDate = LocalDate.now();
 
         List<UsageRecord> records = usageRecordRepository.findBySubscriptionAndDateRange(
-                subscription, startDate, endDate
+                subscription, startDate, endDate);
+
+        Map<String, BigDecimal> usageByMetric = new HashMap<>();
+        BigDecimal totalCost = BigDecimal.ZERO;
+
+        for (UsageRecord record : records) {
+            usageByMetric.merge(record.getMetricName(), record.getQuantity(), BigDecimal::add);
+            if (record.getAmount() != null) {
+                totalCost = totalCost.add(record.getAmount());
+            }
+        }
+
+        return new SubscriptionUsage(
+                subscriptionId,
+                startDate,
+                endDate,
+                usageByMetric,
+                totalCost
         );
-
-        return calculateUsageSummary(subscription, records);
-    }
-
-    /**
-     * Scheduled task to check expiring subscriptions.
-     */
-    @Scheduled(cron = "0 0 2 * * *") // Run daily at 2 AM
-    @Transactional
-    public void checkExpiringSubscriptions() {
-        log.info("Checking for expiring subscriptions");
-
-        Instant now = Instant.now();
-        Instant weekFromNow = now.plus(7, ChronoUnit.DAYS);
-
-        List<Subscription> expiring = subscriptionRepository.findExpiringSubscriptions(now, weekFromNow);
-
-        for (Subscription subscription : expiring) {
-            // Send renewal reminder
-            long daysUntilExpiry = ChronoUnit.DAYS.between(now, subscription.getNextRenewalDate());
-            notificationService.sendRenewalReminder(subscription.getTenant(), subscription, (int) daysUntilExpiry);
-
-            // Auto-renew if enabled
-            if (subscription.getAutoRenew() && daysUntilExpiry <= 1) {
-                try {
-                    renewSubscription(subscription.getId());
-                } catch (Exception e) {
-                    log.error("Failed to auto-renew subscription: {}", subscription.getId(), e);
-                }
-            }
-        }
-
-        log.info("Processed {} expiring subscriptions", expiring.size());
-    }
-
-    /**
-     * Scheduled task to check trial endings.
-     */
-    @Scheduled(cron = "0 0 3 * * *") // Run daily at 3 AM
-    @Transactional
-    public void checkTrialEndings() {
-        log.info("Checking for ending trials");
-
-        Instant now = Instant.now();
-        Instant threeDaysFromNow = now.plus(3, ChronoUnit.DAYS);
-
-        List<Subscription> endingTrials = subscriptionRepository.findEndingTrials(now, threeDaysFromNow);
-
-        for (Subscription subscription : endingTrials) {
-            long daysUntilEnd = ChronoUnit.DAYS.between(now, subscription.getTrialEndDate());
-            notificationService.sendTrialEndingReminder(subscription.getTenant(), subscription, (int) daysUntilEnd);
-
-            // Convert to paid if trial ending today
-            if (daysUntilEnd == 0) {
-                convertTrialToPaid(subscription);
-            }
-        }
-
-        log.info("Processed {} ending trials", endingTrials.size());
     }
 
     // Helper methods
 
-    private String determineBillingCycle(Tenant tenant, SubscriptionPlan plan) {
-        OrganizationType orgType = tenant.getOrganizationType();
-
-        // Government and enterprise prefer annual
-        if (orgType == OrganizationType.GOVERNMENT_AGENCY ||
-                orgType == OrganizationType.FINANCIAL_INSTITUTION ||
-                plan == SubscriptionPlan.ENTERPRISE ||
-                plan == SubscriptionPlan.GOVERNMENT) {
-            return "ANNUAL";
+    private Instant calculateNextRenewalDate(Subscription subscription) {
+        if ("ANNUAL".equals(subscription.getBillingCycle())) {
+            return Instant.now().plus(365, ChronoUnit.DAYS);
+        } else {
+            return Instant.now().plus(30, ChronoUnit.DAYS);
         }
-
-        // Academic prefers academic year
-        if (orgType == OrganizationType.ACADEMIC_INSTITUTION) {
-            return "ANNUAL";
-        }
-
-        // Default to monthly
-        return "MONTHLY";
     }
 
-    private void setPricing(Subscription subscription, OrganizationType orgType, SubscriptionPlan plan) {
-        BigDecimal basePrice = plan.getBaseMonthlyPrice();
+    private void applyOrganizationDiscounts(Subscription subscription, Tenant tenant) {
+        BigDecimal discount = BigDecimal.ZERO;
+        String discountReason = null;
 
-        if (basePrice == null) {
-            // Custom pricing
-            basePrice = calculateCustomPrice(orgType, plan);
+        switch (tenant.getOrganizationType()) {
+            case ACADEMIC_INSTITUTION -> {
+                discount = new BigDecimal("50");
+                discountReason = "Academic discount";
+            }
+            case NON_PROFIT -> {
+                discount = new BigDecimal("30");
+                discountReason = "Non-profit discount";
+            }
+            case GOVERNMENT_AGENCY -> {
+                discount = new BigDecimal("20");
+                discountReason = "Government discount";
+            }
+            case STARTUP -> {
+                discount = new BigDecimal("25");
+                discountReason = "Startup discount";
+            }
         }
 
-        // Apply organization-specific discounts
-        BigDecimal discount = calculateDiscount(orgType, plan);
         if (discount.compareTo(BigDecimal.ZERO) > 0) {
             subscription.setDiscountPercentage(discount);
-            subscription.setDiscountReason(getDiscountReason(orgType));
-        }
+            subscription.setDiscountReason(discountReason);
 
-        subscription.setMonthlyPrice(basePrice);
-
-        // Calculate annual price with discount
-        if ("ANNUAL".equals(subscription.getBillingCycle())) {
-            BigDecimal annualPrice = basePrice.multiply(BigDecimal.valueOf(12))
-                    .multiply(BigDecimal.valueOf(0.9)); // 10% annual discount
-            subscription.setAnnualPrice(annualPrice);
+            BigDecimal discountAmount = subscription.getMonthlyPrice()
+                    .multiply(discount)
+                    .divide(new BigDecimal("100"));
+            subscription.setMonthlyPrice(
+                    subscription.getMonthlyPrice().subtract(discountAmount)
+            );
         }
     }
 
-    private boolean shouldHaveTrial(Tenant tenant, SubscriptionPlan plan) {
-        // No trial for government or custom plans
-        if (plan == SubscriptionPlan.GOVERNMENT || plan == SubscriptionPlan.CUSTOM) {
-            return false;
+    private boolean canChangePlan(SubscriptionPlan oldPlan, SubscriptionPlan newPlan) {
+        // Basic validation - can be enhanced
+        if (oldPlan == SubscriptionPlan.TRIAL && newPlan == SubscriptionPlan.FREEMIUM) {
+            return false; // Cannot downgrade from trial to freemium
         }
-
-        // Individuals and startups get trials
-        OrganizationType orgType = tenant.getOrganizationType();
-        return orgType == OrganizationType.INDIVIDUAL ||
-                orgType == OrganizationType.STARTUP ||
-                plan == SubscriptionPlan.TRIAL;
-    }
-
-    private void setTrialPeriod(Subscription subscription, OrganizationType orgType) {
-        int trialDays = switch (orgType) {
-            case INDIVIDUAL -> 30;
-            case STARTUP -> 60;
-            case ACADEMIC_INSTITUTION -> 90;
-            default -> 30;
-        };
-
-        subscription.setTrialStartDate(Instant.now());
-        subscription.setTrialEndDate(Instant.now().plus(trialDays, ChronoUnit.DAYS));
-    }
-
-    private Instant calculateNextRenewalDate(Subscription subscription) {
-        Instant baseDate = subscription.getStartDate();
-
-        return switch (subscription.getBillingCycle()) {
-            case "MONTHLY" -> baseDate.plus(30, ChronoUnit.DAYS);
-            case "ANNUAL" -> baseDate.plus(365, ChronoUnit.DAYS);
-            case "QUARTERLY" -> baseDate.plus(90, ChronoUnit.DAYS);
-            default -> baseDate.plus(30, ChronoUnit.DAYS);
-        };
-    }
-
-    private BigDecimal calculateCustomPrice(OrganizationType orgType, SubscriptionPlan plan) {
-        // Custom pricing logic based on organization type
-        return BigDecimal.valueOf(999.99); // Placeholder
-    }
-
-    private BigDecimal calculateDiscount(OrganizationType orgType, SubscriptionPlan plan) {
-        return switch (orgType) {
-            case ACADEMIC_INSTITUTION -> BigDecimal.valueOf(50);
-            case NON_PROFIT -> BigDecimal.valueOf(30);
-            case GOVERNMENT_AGENCY -> BigDecimal.valueOf(20);
-            case STARTUP -> BigDecimal.valueOf(25);
-            default -> BigDecimal.ZERO;
-        };
-    }
-
-    private String getDiscountReason(OrganizationType orgType) {
-        return switch (orgType) {
-            case ACADEMIC_INSTITUTION -> "Academic Discount";
-            case NON_PROFIT -> "Non-Profit Discount";
-            case GOVERNMENT_AGENCY -> "Government Rate";
-            case STARTUP -> "Startup Program";
-            default -> null;
-        };
-    }
-
-    private BigDecimal calculateProratedAmount(Subscription subscription, SubscriptionPlan newPlan) {
-        // Calculate prorated amount for plan change
-        // This is a simplified calculation
-        return BigDecimal.ZERO;
-    }
-
-    private void createPlanChangeRecord(Subscription subscription, SubscriptionPlan oldPlan,
-                                        SubscriptionPlan newPlan, BigDecimal amount) {
-        // Create usage record for plan change
-        UsageRecord record = UsageRecord.builder()
-                .subscription(subscription)
-                .usageDate(LocalDate.now())
-                .metricName("PLAN_CHANGE")
-                .description(String.format("Plan change from %s to %s", oldPlan, newPlan))
-                .quantity(BigDecimal.ONE)
-                .amount(amount)
-                .isBillable(true)
-                .recordedAt(Instant.now())
-                .build();
-
-        usageRecordRepository.save(record);
-    }
-
-    private void createRenewalRecord(Subscription subscription, BigDecimal amount) {
-        UsageRecord record = UsageRecord.builder()
-                .subscription(subscription)
-                .usageDate(LocalDate.now())
-                .metricName("SUBSCRIPTION_RENEWAL")
-                .description("Subscription renewal")
-                .quantity(BigDecimal.ONE)
-                .amount(amount)
-                .isBillable(true)
-                .recordedAt(Instant.now())
-                .build();
-
-        usageRecordRepository.save(record);
-    }
-
-    private boolean processPayment(Subscription subscription, BigDecimal amount) {
-        // Integration with payment processor would go here
-        // For now, return true to simulate successful payment
-        log.info("Processing payment of {} for subscription {}", amount, subscription.getId());
         return true;
     }
 
-    private String determineMetricCategory(String metricName) {
+    private String determineCategory(String metricName) {
         if (metricName.contains("STORAGE")) return "STORAGE";
         if (metricName.contains("API")) return "API";
         if (metricName.contains("COMPUTE")) return "COMPUTE";
         if (metricName.contains("USER")) return "USERS";
-        return "DATA";
+        return "OTHER";
     }
 
-    private boolean isOverage(Subscription subscription, String metricName, BigDecimal quantity) {
-        // Check if usage exceeds plan limits
-        return false; // Simplified
+    private BigDecimal getUsageRate(SubscriptionPlan plan, String metricName) {
+        // Simplified rate calculation - would be more complex in production
+        return switch (metricName) {
+            case "API_CALLS" -> new BigDecimal("0.0001");
+            case "STORAGE_GB" -> new BigDecimal("0.10");
+            case "COMPUTE_HOURS" -> new BigDecimal("0.50");
+            default -> BigDecimal.ZERO;
+        };
     }
 
-    private BigDecimal calculateOverage(Subscription subscription, String metricName, BigDecimal quantity) {
-        // Calculate overage amount
-        return BigDecimal.ZERO; // Simplified
-    }
-
-    private BigDecimal getOverageRate(Subscription subscription, String metricName) {
-        // Get overage rate for metric
-        return BigDecimal.valueOf(0.01); // Simplified
-    }
-
-    private void checkUsageLimits(Subscription subscription, String metricName) {
-        // Check and notify if approaching limits
-    }
-
-    private SubscriptionUsage calculateUsageSummary(Subscription subscription, List<UsageRecord> records) {
-        // Calculate usage summary
-        return new SubscriptionUsage(); // Simplified
-    }
-
-    private void convertTrialToPaid(Subscription subscription) {
-        subscription.setSubscriptionStatus("ACTIVE");
-        subscription.setTrialEndDate(Instant.now());
-        subscriptionRepository.save(subscription);
-        notificationService.sendTrialConverted(subscription.getTenant(), subscription);
-    }
-
-    // DTOs
-
-    @lombok.Data
+    // Inner class for usage statistics
     public static class SubscriptionUsage {
-        private BigDecimal totalCost;
-        private BigDecimal storageUsed;
-        private BigDecimal apiCallsUsed;
-        private BigDecimal computeHoursUsed;
-        private int activeUsers;
-    }
+        private final UUID subscriptionId;
+        private final LocalDate startDate;
+        private final LocalDate endDate;
+        private final Map<String, BigDecimal> usageByMetric;
+        private final BigDecimal totalCost;
 
-    // Exceptions
-
-    public static class SubscriptionNotFoundException extends RuntimeException {
-        public SubscriptionNotFoundException(String message) {
-            super(message);
+        public SubscriptionUsage(UUID subscriptionId, LocalDate startDate, LocalDate endDate,
+                                 Map<String, BigDecimal> usageByMetric, BigDecimal totalCost) {
+            this.subscriptionId = subscriptionId;
+            this.startDate = startDate;
+            this.endDate = endDate;
+            this.usageByMetric = usageByMetric;
+            this.totalCost = totalCost;
         }
-    }
 
-    public static class SubscriptionAlreadyExistsException extends RuntimeException {
-        public SubscriptionAlreadyExistsException(String message) {
-            super(message);
-        }
-    }
-
-    public static class InvalidPlanChangeException extends RuntimeException {
-        public InvalidPlanChangeException(String message) {
-            super(message);
-        }
-    }
-
-    public static class InvalidSubscriptionStateException extends RuntimeException {
-        public InvalidSubscriptionStateException(String message) {
-            super(message);
-        }
+        // Getters
+        public UUID getSubscriptionId() { return subscriptionId; }
+        public LocalDate getStartDate() { return startDate; }
+        public LocalDate getEndDate() { return endDate; }
+        public Map<String, BigDecimal> getUsageByMetric() { return usageByMetric; }
+        public BigDecimal getTotalCost() { return totalCost; }
     }
 }

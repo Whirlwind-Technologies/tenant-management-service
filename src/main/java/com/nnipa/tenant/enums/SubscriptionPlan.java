@@ -22,7 +22,8 @@ public enum SubscriptionPlan {
             1000, // API calls per day
             false, // advanced analytics
             false, // priority support
-            0 // compute units per month
+            0, // compute units per month
+            0 // trial days
     ),
 
     BASIC(
@@ -35,7 +36,8 @@ public enum SubscriptionPlan {
             10000,
             false,
             false,
-            100
+            100,
+            14 // 14-day trial
     ),
 
     PROFESSIONAL(
@@ -48,7 +50,8 @@ public enum SubscriptionPlan {
             100000,
             true,
             true,
-            1000
+            1000,
+            30 // 30-day trial
     ),
 
     ENTERPRISE(
@@ -61,7 +64,8 @@ public enum SubscriptionPlan {
             -1, // unlimited API calls
             true,
             true,
-            10000
+            10000,
+            30 // 30-day trial
     ),
 
     GOVERNMENT(
@@ -74,7 +78,8 @@ public enum SubscriptionPlan {
             -1,
             true,
             true,
-            50000
+            50000,
+            60 // 60-day trial for government evaluation
     ),
 
     ACADEMIC(
@@ -87,7 +92,7 @@ public enum SubscriptionPlan {
             500000,
             true,
             true,
-            5000
+            5000,90 // Extended 90-day trial for academic year planning
     ),
 
     CUSTOM(
@@ -100,7 +105,8 @@ public enum SubscriptionPlan {
             -1,
             true,
             true,
-            -1
+            -1,
+            0 //Custom negotiation for trial
     ),
 
     TRIAL(
@@ -113,7 +119,8 @@ public enum SubscriptionPlan {
             50000,
             true,
             true,
-            500
+            500,
+            30 // 30-day standard trial
     );
 
     private final String displayName;
@@ -126,6 +133,7 @@ public enum SubscriptionPlan {
     private final boolean hasAdvancedAnalytics;
     private final boolean hasPrioritySupport;
     private final int computeUnitsPerMonth; // -1 for unlimited
+    private final int trialDays;
 
     /**
      * Checks if this plan supports a specific number of users.
@@ -194,4 +202,6 @@ public enum SubscriptionPlan {
             default -> false;
         };
     }
+
+
 }

@@ -11,7 +11,7 @@ import java.util.Map;
 
 /**
  * Tenant settings entity storing configuration and preferences.
- * Flexible key-value storage for organization-specific settings.
+ * Authentication, authorization, rate limiting, and notifications are handled by separate services.
  */
 @Entity
 @Table(name = "tenant_settings", indexes = {
@@ -46,24 +46,11 @@ public class TenantSettings extends BaseEntity {
     @Column(name = "currency_format", length = 50)
     private String currencyFormat = "$#,##0.00";
 
-    // Security Settings
-    @Column(name = "password_policy", columnDefinition = "TEXT")
-    private String passwordPolicy; // JSON string with policy rules
+    @Column(name = "timezone", length = 50)
+    private String timezone = "UTC";
 
-    @Column(name = "session_timeout_minutes")
-    private Integer sessionTimeoutMinutes = 30;
-
-    @Column(name = "mfa_required", nullable = false)
-    private Boolean mfaRequired = false;
-
-    @Column(name = "mfa_type", length = 50)
-    private String mfaType; // TOTP, SMS, EMAIL
-
-    @Column(name = "ip_whitelist", columnDefinition = "TEXT")
-    private String ipWhitelist; // Comma-separated IP addresses/ranges
-
-    @Column(name = "allowed_domains", columnDefinition = "TEXT")
-    private String allowedDomains; // For email domain restrictions
+    @Column(name = "fiscal_year_start", length = 10)
+    private String fiscalYearStart = "01-01"; // MM-DD format
 
     // Data Settings
     @Column(name = "data_retention_days")
@@ -84,48 +71,25 @@ public class TenantSettings extends BaseEntity {
     @Column(name = "allowed_export_formats", length = 255)
     private String allowedExportFormats = "CSV,JSON,EXCEL";
 
-    // Notification Settings
-    @Column(name = "notification_email", length = 255)
-    private String notificationEmail;
-
-    @Column(name = "billing_email", length = 255)
-    private String billingEmail;
-
-    @Column(name = "technical_email", length = 255)
-    private String technicalEmail;
-
-    @Column(name = "email_notifications_enabled", nullable = false)
-    private Boolean emailNotificationsEnabled = true;
-
-    @Column(name = "sms_notifications_enabled", nullable = false)
-    private Boolean smsNotificationsEnabled = false;
-
-    @Column(name = "webhook_url", length = 500)
-    private String webhookUrl;
-
-    @Column(name = "webhook_secret", length = 255)
-    private String webhookSecret;
-
-    // Integration Settings
-    @Column(name = "sso_enabled", nullable = false)
-    private Boolean ssoEnabled = false;
-
-    @Column(name = "sso_provider", length = 50)
-    private String ssoProvider; // SAML, OAUTH, OIDC
-
-    @Column(name = "sso_config", columnDefinition = "TEXT")
-    private String ssoConfig; // JSON configuration
-
-    @Column(name = "api_key", length = 255)
-    private String apiKey;
-
-    @Column(name = "api_secret", length = 255)
-    private String apiSecret;
-
-    @Column(name = "api_rate_limit_override")
-    private Integer apiRateLimitOverride;
+    @Column(name = "max_export_rows")
+    private Integer maxExportRows = 100000;
 
     // UI Customization
+    @Column(name = "theme", length = 50)
+    private String theme = "light"; // light, dark, auto
+
+    @Column(name = "primary_color", length = 7)
+    private String primaryColor = "#1976D2";
+
+    @Column(name = "secondary_color", length = 7)
+    private String secondaryColor = "#424242";
+
+    @Column(name = "logo_url", length = 500)
+    private String logoUrl;
+
+    @Column(name = "favicon_url", length = 500)
+    private String faviconUrl;
+
     @Column(name = "show_logo", nullable = false)
     private Boolean showLogo = true;
 
@@ -138,12 +102,19 @@ public class TenantSettings extends BaseEntity {
     @Column(name = "default_dashboard", length = 100)
     private String defaultDashboard;
 
-    // Feature Toggles
-    @Column(name = "enable_api_access", nullable = false)
-    private Boolean enableApiAccess = true;
+    // Business Settings
+    @Column(name = "business_hours", columnDefinition = "TEXT")
+    private String businessHours; // JSON with day-wise hours
 
-    @Column(name = "enable_data_sharing", nullable = false)
-    private Boolean enableDataSharing = false;
+    @Column(name = "working_days", length = 50)
+    private String workingDays = "MON,TUE,WED,THU,FRI";
+
+    @Column(name = "holiday_calendar", length = 50)
+    private String holidayCalendar; // Reference to holiday calendar
+
+    // Feature Preferences (UI toggles, not access control)
+    @Column(name = "enable_dashboard_sharing", nullable = false)
+    private Boolean enableDashboardSharing = false;
 
     @Column(name = "enable_public_dashboards", nullable = false)
     private Boolean enablePublicDashboards = false;
@@ -151,13 +122,14 @@ public class TenantSettings extends BaseEntity {
     @Column(name = "enable_custom_reports", nullable = false)
     private Boolean enableCustomReports = true;
 
+    @Column(name = "enable_data_collaboration", nullable = false)
+    private Boolean enableDataCollaboration = false;
+
     @Column(name = "enable_advanced_analytics", nullable = false)
     private Boolean enableAdvancedAnalytics = false;
 
-    // Custom Settings (JSON)
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "custom_settings", columnDefinition = "jsonb")
-    private Map<String, Object> customSettings = new HashMap<>();
+    @Column(name = "enable_api_access", nullable = false)
+    private Boolean enableApiAccess = true;
 
     // Organization-specific Settings
     @JdbcTypeCode(SqlTypes.JSON)
@@ -167,6 +139,20 @@ public class TenantSettings extends BaseEntity {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "workflow_settings", columnDefinition = "jsonb")
     private Map<String, Object> workflowSettings = new HashMap<>();
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "integration_settings", columnDefinition = "jsonb")
+    private Map<String, Object> integrationSettings = new HashMap<>();
+
+    // Custom Settings (JSON)
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "custom_settings", columnDefinition = "jsonb")
+    private Map<String, Object> customSettings = new HashMap<>();
+
+    // Notification Preferences (just preferences, not implementation)
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "notification_preferences", columnDefinition = "jsonb")
+    private Map<String, Object> notificationPreferences = new HashMap<>();
 
     // Helper Methods
 
@@ -192,18 +178,59 @@ public class TenantSettings extends BaseEntity {
     }
 
     /**
-     * Checks if a feature is enabled.
+     * Sets notification preference.
      */
-    public boolean isFeatureEnabled(String feature) {
+    public void setNotificationPreference(String channel, boolean enabled) {
+        if (notificationPreferences == null) {
+            notificationPreferences = new HashMap<>();
+        }
+        notificationPreferences.put(channel, enabled);
+    }
+
+    /**
+     * Gets notification preference.
+     */
+    public boolean getNotificationPreference(String channel) {
+        if (notificationPreferences == null) {
+            return true; // Default to enabled
+        }
+        return (boolean) notificationPreferences.getOrDefault(channel, true);
+    }
+
+    /**
+     * Checks if a UI feature is enabled.
+     * Note: This is for UI preferences only, not access control.
+     */
+    public boolean isUiFeatureEnabled(String feature) {
         return switch (feature) {
-            case "API_ACCESS" -> enableApiAccess;
-            case "DATA_SHARING" -> enableDataSharing;
+            case "DASHBOARD_SHARING" -> enableDashboardSharing;
             case "PUBLIC_DASHBOARDS" -> enablePublicDashboards;
             case "CUSTOM_REPORTS" -> enableCustomReports;
+            case "DATA_COLLABORATION" -> enableDataCollaboration;
             case "ADVANCED_ANALYTICS" -> enableAdvancedAnalytics;
-            case "SSO" -> ssoEnabled;
-            case "MFA" -> mfaRequired;
+            case "API_ACCESS" -> enableApiAccess;
             default -> false;
         };
+    }
+
+    /**
+     * Gets compliance setting value.
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T getComplianceSetting(String key, Class<T> type) {
+        if (complianceSettings == null || !complianceSettings.containsKey(key)) {
+            return null;
+        }
+        return (T) complianceSettings.get(key);
+    }
+
+    /**
+     * Sets compliance setting.
+     */
+    public void setComplianceSetting(String key, Object value) {
+        if (complianceSettings == null) {
+            complianceSettings = new HashMap<>();
+        }
+        complianceSettings.put(key, value);
     }
 }

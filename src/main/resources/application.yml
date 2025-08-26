@@ -1,4 +1,4 @@
-# Base Configuration for Tenant Management Service
+# Application configuration for NNIPA Tenant Management Service
 spring:
   application:
     name: tenant-management-service
@@ -8,17 +8,16 @@ spring:
 
   # Database Configuration
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/tenant_db}
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/tenant_db_dev}
     username: ${DB_USERNAME:tenant_user}
     password: ${DB_PASSWORD:tenant_pass}
     driver-class-name: org.postgresql.Driver
     hikari:
       connection-timeout: 30000
-      maximum-pool-size: ${DB_POOL_SIZE:20}
-      minimum-idle: ${DB_MIN_IDLE:5}
+      maximum-pool-size: 10
+      minimum-idle: 5
       idle-timeout: 600000
       max-lifetime: 1800000
-      pool-name: TenantHikariPool
 
   # JPA Configuration
   jpa:
@@ -27,16 +26,20 @@ spring:
     properties:
       hibernate:
         format_sql: true
+        use_sql_comments: true
         jdbc:
           batch_size: 25
           batch_versioned_data: true
         order_inserts: true
         order_updates: true
-        generate_statistics: ${HIBERNATE_STATS:false}
-    show-sql: ${JPA_SHOW_SQL:false}
-    open-in-view: false
 
-  # Redis Configuration
+  # Flyway Configuration
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+
+  # Redis Cache Configuration
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -47,190 +50,192 @@ spring:
         pool:
           max-active: 8
           max-idle: 8
-          min-idle: 2
-          max-wait: -1ms
+          min-idle: 0
 
   # Cache Configuration
   cache:
     type: redis
     redis:
-      time-to-live: ${CACHE_TTL:3600000}
+      time-to-live: 600000
       cache-null-values: false
-      enable-statistics: true
-    cache-names:
-      - tenants
-      - tenant-settings
-      - tenant-features
-      - subscriptions
-      - organization-types
+      use-key-prefix: true
+      key-prefix: "nnipa:tenant:"
 
-  # Flyway Configuration
-  flyway:
-    enabled: true
-    baseline-on-migrate: true
-    locations: classpath:db/migration
-    schemas: public
-    table: flyway_schema_history
-    validate-on-migrate: true
-    clean-disabled: true
+# Service Integration Configuration
+services:
+  # Authentication Service
+  auth:
+    url: ${AUTH_SERVICE_URL:http://auth-service:8080}
+    timeout: 5000
+    retry:
+      max-attempts: 3
+      backoff: 1000
 
-  # Security Configuration (Basic for now)
-  security:
-    user:
-      name: ${ADMIN_USERNAME:admin}
-      password: ${ADMIN_PASSWORD:admin123}
-      roles: ADMIN
+  # Authorization Service
+  authorization:
+    url: ${AUTHZ_SERVICE_URL:http://authz-service:8080}
+    timeout: 5000
+    retry:
+      max-attempts: 3
+      backoff: 1000
 
-# Actuator Configuration
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,metrics,prometheus,env,loggers,caches
-      base-path: /management
-  endpoint:
-    health:
-      show-details: always
-      probes:
-        enabled: true
-  health:
-    redis:
-      enabled: true
-    db:
-      enabled: true
-  metrics:
-    tags:
-      application: ${spring.application.name}
-      environment: ${spring.profiles.active}
-  tracing:
-    sampling:
-      probability: ${TRACING_PROBABILITY:0.1}
-  prometheus:
-    metrics:
-      export:
-        enabled: true
+  # Notification Service
+  notification:
+    url: ${NOTIFICATION_SERVICE_URL:http://notification-service:8080}
+    timeout: 3000
+    retry:
+      max-attempts: 2
+      backoff: 500
+    async: true
 
-# Server Configuration
-server:
-  port: ${SERVER_PORT:8080}
-  servlet:
-    context-path: /api/v1
-  compression:
-    enabled: true
-    mime-types: application/json,application/xml,text/html,text/xml,text/plain
-  error:
-    include-message: always
-    include-binding-errors: always
-    include-stacktrace: on_param
-    include-exception: false
-  shutdown: graceful
+  # API Gateway (for rate limiting info)
+  api-gateway:
+    url: ${API_GATEWAY_URL:http://api-gateway:8080}
+    internal-url: ${API_GATEWAY_INTERNAL_URL:http://api-gateway-internal:8081}
 
-# API Documentation
-springdoc:
-  api-docs:
-    enabled: true
-    path: /api-docs
-  swagger-ui:
-    enabled: true
-    path: /swagger-ui.html
-    tags-sorter: alpha
-    operations-sorter: alpha
-  show-actuator: true
-
-# Logging Configuration
-logging:
-  level:
-    root: ${LOG_LEVEL_ROOT:INFO}
-    com.nnipa: ${LOG_LEVEL_APP:DEBUG}
-    org.springframework.web: ${LOG_LEVEL_WEB:INFO}
-    org.springframework.security: ${LOG_LEVEL_SECURITY:INFO}
-    org.hibernate.SQL: ${LOG_LEVEL_SQL:INFO}
-    org.hibernate.type.descriptor.sql.BasicBinder: ${LOG_LEVEL_SQL_PARAMS:TRACE}
-  pattern:
-    console: '%d{yyyy-MM-dd HH:mm:ss} - %msg%n'
-    file: '%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n'
-  file:
-    name: logs/tenant-management-service.log
-    max-size: 10MB
-    max-history: 30
-
-# Application-specific Configuration
-app:
-  tenant:
-    default-timezone: UTC
-    max-users-per-tenant: ${MAX_USERS_PER_TENANT:1000}
-    trial-period-days: ${TRIAL_PERIOD_DAYS:30}
-    cache-ttl-minutes: ${TENANT_CACHE_TTL:60}
-
-  organization:
-    types:
-      - GOVERNMENT_AGENCY
-      - CORPORATION
-      - ACADEMIC_INSTITUTION
-      - NON_PROFIT
-      - INDIVIDUAL
-      - RESEARCH_ORGANIZATION
-
-  subscription:
-    plans:
-      - FREEMIUM
-      - BASIC
-      - PROFESSIONAL
-      - ENTERPRISE
-      - GOVERNMENT
-      - ACADEMIC
-    grace-period-days: ${GRACE_PERIOD_DAYS:7}
-
-  security:
-    jwt-secret: ${JWT_SECRET:default-secret-change-in-production}
-    jwt-expiration-ms: ${JWT_EXPIRATION:3600000}
-
-  integration:
-    auth-service-url: ${AUTH_SERVICE_URL:http://auth-service:8081}
-    billing-service-url: ${BILLING_SERVICE_URL:http://billing-service:8082}
-    notification-service-url: ${NOTIFICATION_SERVICE_URL:http://notification-service:8083}
-
-# Resilience4j Configuration
+# Circuit Breaker Configuration
 resilience4j:
   circuitbreaker:
     instances:
       auth-service:
-        register-health-indicator: true
         sliding-window-size: 10
-        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
         permitted-number-of-calls-in-half-open-state: 3
         automatic-transition-from-open-to-half-open-enabled: true
-        wait-duration-in-open-state: 5s
-        failure-rate-threshold: 50
-        event-consumer-buffer-size: 10
-      billing-service:
-        register-health-indicator: true
+
+      authz-service:
         sliding-window-size: 10
-        minimum-number-of-calls: 5
-        permitted-number-of-calls-in-half-open-state: 3
-        automatic-transition-from-open-to-half-open-enabled: true
-        wait-duration-in-open-state: 5s
         failure-rate-threshold: 50
-        event-consumer-buffer-size: 10
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+
+      notification-service:
+        sliding-window-size: 5
+        failure-rate-threshold: 70
+        wait-duration-in-open-state: 20s
+        permitted-number-of-calls-in-half-open-state: 2
 
   retry:
     instances:
       auth-service:
         max-attempts: 3
         wait-duration: 1s
-        enable-exponential-backoff: true
-        exponential-backoff-multiplier: 2
-      billing-service:
-        max-attempts: 3
-        wait-duration: 1s
-        enable-exponential-backoff: true
-        exponential-backoff-multiplier: 2
 
-  timelimiter:
-    instances:
-      auth-service:
-        timeout-duration: 3s
-        cancel-running-future: true
-      billing-service:
-        timeout-duration: 5s
-        cancel-running-future: true
+      notification-service:
+        max-attempts: 2
+        wait-duration: 500ms
+
+# Management & Monitoring
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,caches
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  health:
+    db:
+      enabled: true
+    redis:
+      enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      environment: ${spring.profiles.active}
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
+# Logging Configuration
+logging:
+  level:
+    com.nnipa.tenant: ${LOG_LEVEL:INFO}
+    org.springframework.web: ${SPRING_LOG_LEVEL:INFO}
+    org.hibernate: ${HIBERNATE_LOG_LEVEL:WARN}
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+# Server Configuration
+server:
+  port: ${SERVER_PORT:8082}
+  servlet:
+    context-path: /tenant-management
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain
+  error:
+    include-message: always
+    include-binding-errors: always
+
+# OpenAPI/Swagger Configuration
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    operations-sorter: method
+    tags-sorter: alpha
+
+# Application-specific Configuration
+app:
+  tenant:
+    # Default tenant isolation strategy for new tenants
+    default-isolation-strategy: SHARED_SCHEMA_ROW_LEVEL
+
+    # Schema management
+    schema:
+      prefix: "tenant_"
+      template: "tenant_template"
+
+    # Subscription defaults
+    subscription:
+      default-trial-days: 14
+      auto-renew: true
+      grace-period-days: 7
+
+    # Feature flag defaults
+    features:
+      auto-enable-basic: true
+      trial-features:
+        - ADVANCED_ANALYTICS
+        - DATA_EXPORT
+        - CUSTOM_DASHBOARDS
+
+    # Usage tracking
+    usage:
+      tracking-interval: HOURLY
+      aggregation-interval: DAILY
+      retention-days: 90
+
+    # Organization defaults by type
+    organization-defaults:
+      government:
+        compliance-frameworks:
+          - FISMA
+          - FEDRAMP
+        data-retention-days: 2555  # 7 years
+      healthcare:
+        compliance-frameworks:
+          - HIPAA
+        data-retention-days: 2190  # 6 years
+      financial:
+        compliance-frameworks:
+          - SOX
+          - PCI_DSS
+        data-retention-days: 2555  # 7 years
+      academic:
+        compliance-frameworks:
+          - FERPA
+        data-retention-days: 1095  # 3 years
+      default:
+        compliance-frameworks:
+          - GDPR
+        data-retention-days: 365   # 1 year

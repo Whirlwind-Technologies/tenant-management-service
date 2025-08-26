@@ -34,7 +34,6 @@ import java.util.UUID;
 public class UsageQuotaService {
 
     private final UsageRecordRepository usageRecordRepository;
-    private final NotificationService notificationService;
 
     /**
      * Gets current usage statistics for a tenant.
@@ -124,7 +123,7 @@ public class UsageQuotaService {
             record.calculateAmount();
 
             // Notify about overage
-            notificationService.sendOverageAlert(tenant, resourceType, amount, record.getAmount());
+//            notificationService.sendOverageAlert(tenant, resourceType, amount, record.getAmount());
         }
 
         record = usageRecordRepository.save(record);
@@ -236,7 +235,7 @@ public class UsageQuotaService {
                 UsageStatistics stats = calculateUsageStatistics(tenant, records);
 
                 // Send usage report
-                notificationService.sendMonthlyUsageReport(tenant, stats, startDate, endDate);
+//                notificationService.sendMonthlyUsageReport(tenant, stats, startDate, endDate);
 
                 // Check for consistent overage
                 checkConsistentOverage(tenant, records);
@@ -367,9 +366,9 @@ public class UsageQuotaService {
         BigDecimal percentage = quotaCheck.getUsagePercentage();
 
         if (percentage.compareTo(BigDecimal.valueOf(90)) >= 0) {
-            notificationService.sendUsageAlert(tenant, "90% quota reached", quotaCheck);
+//            notificationService.sendUsageAlert(tenant, "90% quota reached", quotaCheck);
         } else if (percentage.compareTo(BigDecimal.valueOf(75)) >= 0) {
-            notificationService.sendUsageAlert(tenant, "75% quota reached", quotaCheck);
+//            notificationService.sendUsageAlert(tenant, "75% quota reached", quotaCheck);
         } else if (percentage.compareTo(BigDecimal.valueOf(50)) >= 0) {
             // Log only, no notification
             log.info("Tenant {} has reached 50% of quota", tenant.getName());
@@ -402,8 +401,8 @@ public class UsageQuotaService {
                 .count();
 
         if (overageCount > 10) {
-            notificationService.sendUpgradeRecommendation(tenant,
-                    "Consistent overage detected. Consider upgrading your plan.");
+//            notificationService.sendUpgradeRecommendation(tenant,
+//                    "Consistent overage detected. Consider upgrading your plan.");
         }
     }
 

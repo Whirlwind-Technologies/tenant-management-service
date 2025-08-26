@@ -256,6 +256,29 @@ public class FeatureFlagService {
         log.info("Processed {} expired trials", expiredTrials.size());
     }
 
+    /**
+     * Enables a feature for a tenant (wrapper method).
+     */
+    @Transactional
+    public FeatureFlag enableFeatureForTenant(Tenant tenant, String featureCode) {
+        return enableFeature(tenant, featureCode);
+    }
+
+    /**
+     * Disables a feature for a tenant (wrapper method).
+     */
+    @Transactional
+    public FeatureFlag disableFeatureForTenant(Tenant tenant, String featureCode) {
+        return disableFeature(tenant, featureCode);
+    }
+
+    /**
+     * Checks if a feature is enabled for a tenant (wrapper method).
+     */
+    public boolean isFeatureEnabledForTenant(Tenant tenant, String featureCode) {
+        return isFeatureEnabled(tenant, featureCode);
+    }
+
     // Helper methods
 
     private static Map<String, FeatureDefinition> initializeFeatureCatalog() {
@@ -277,23 +300,6 @@ public class FeatureFlagService {
                 "PREDICTIVE_ANALYTICS", "Predictive Analytics", "ANALYTICS",
                 Set.of(SubscriptionPlan.ENTERPRISE, SubscriptionPlan.GOVERNMENT),
                 Set.of(OrganizationType.FINANCIAL_INSTITUTION, OrganizationType.GOVERNMENT_AGENCY), true
-        ));
-
-        // Security features
-        catalog.put("BASIC_SECURITY", new FeatureDefinition(
-                "BASIC_SECURITY", "Basic Security", "SECURITY",
-                Set.of(SubscriptionPlan.FREEMIUM), Set.of(), false
-        ));
-
-        catalog.put("MFA", new FeatureDefinition(
-                "MFA", "Multi-Factor Authentication", "SECURITY",
-                Set.of(SubscriptionPlan.BASIC), Set.of(), false
-        ));
-
-        catalog.put("SSO", new FeatureDefinition(
-                "SSO", "Single Sign-On", "SECURITY",
-                Set.of(SubscriptionPlan.ENTERPRISE, SubscriptionPlan.GOVERNMENT, SubscriptionPlan.ACADEMIC),
-                Set.of(OrganizationType.CORPORATION, OrganizationType.GOVERNMENT_AGENCY, OrganizationType.ACADEMIC_INSTITUTION), false
         ));
 
         catalog.put("DATA_ENCRYPTION", new FeatureDefinition(

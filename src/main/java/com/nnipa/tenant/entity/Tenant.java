@@ -7,12 +7,15 @@ import com.nnipa.tenant.enums.TenantStatus;
 import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.Where;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 
 /**
  * Tenant entity representing an organization or individual user in the NNIPA platform.
@@ -65,6 +68,22 @@ public class Tenant extends BaseEntity {
 
     @Column(name = "organization_website", length = 500)
     private String organizationWebsite;
+
+    // Add in metadata section:
+    @Column(name = "marked_for_deletion_at")
+    private Instant markedForDeletionAt;
+
+    @Column(name = "verified_at")
+    private Instant verifiedAt;
+
+    @Column(name = "verified_by", length = 255)
+    private String verifiedBy;
+
+    // Add metadata field for flexible storage:
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "metadata", columnDefinition = "jsonb")
+    private Map<String, Object> metadata = new HashMap<>();
+
 
     @Column(name = "tax_id", length = 50)
     private String taxId;
@@ -131,12 +150,6 @@ public class Tenant extends BaseEntity {
     @Column(name = "is_verified", nullable = false)
     private Boolean isVerified = false;
 
-    @Column(name = "verified_at")
-    private Instant verifiedAt;
-
-    @Column(name = "verified_by", length = 255)
-    private String verifiedBy;
-
     @Column(name = "verification_document", length = 500)
     private String verificationDocument;
 
@@ -149,11 +162,11 @@ public class Tenant extends BaseEntity {
     private Set<Tenant> childTenants = new HashSet<>();
 
     // Subscription and Billing
-    @OneToOne(mappedBy = "tenant", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @OneToOne(mappedBy = "tenant", cascade = CascadeType.ALL)
     private Subscription subscription;
 
     // Settings and Configuration
-    @OneToOne(mappedBy = "tenant", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @OneToOne(mappedBy = "tenant", cascade = CascadeType.ALL)
     private TenantSettings settings;
 
     // Feature Flags

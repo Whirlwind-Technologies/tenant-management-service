@@ -15,21 +15,20 @@ import java.util.UUID;
 @Repository
 public interface FeatureFlagRepository extends JpaRepository<FeatureFlag, UUID> {
 
-    Optional<FeatureFlag> findByTenantAndFeatureCode(Tenant tenant, String featureCode);
-
     List<FeatureFlag> findByTenant(Tenant tenant);
 
-    List<FeatureFlag> findByTenantAndIsEnabled(Tenant tenant, boolean isEnabled);
+    Optional<FeatureFlag> findByTenantAndFeatureCode(Tenant tenant, String featureCode);
 
-    @Query("SELECT f FROM FeatureFlag f WHERE f.resetFrequency = :frequency")
-    List<FeatureFlag> findByResetFrequency(@Param("frequency") String frequency);
+    List<FeatureFlag> findByTenantAndIsEnabled(Tenant tenant, Boolean isEnabled);
+
+    List<FeatureFlag> findByResetFrequency(String resetFrequency);
 
     @Query("SELECT f FROM FeatureFlag f WHERE f.trialEnabled = true " +
             "AND f.enabledUntil < :now AND f.isEnabled = true")
     List<FeatureFlag> findExpiredTrials(@Param("now") Instant now);
 
-    @Query("SELECT f FROM FeatureFlag f WHERE f.tenant.id = :tenantId " +
+    @Query("SELECT f FROM FeatureFlag f WHERE f.tenant = :tenant " +
             "AND f.category = :category AND f.isEnabled = true")
-    List<FeatureFlag> findEnabledByTenantAndCategory(@Param("tenantId") UUID tenantId,
-                                                     @Param("category") String category);
+    List<FeatureFlag> findByTenantAndCategory(@Param("tenant") Tenant tenant,
+                                              @Param("category") String category);
 }
