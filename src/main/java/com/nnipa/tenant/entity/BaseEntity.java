@@ -1,10 +1,7 @@
 package com.nnipa.tenant.entity;
 
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
+import lombok.*;
 import lombok.experimental.SuperBuilder;
 import org.springframework.data.annotation.CreatedBy;
 import org.springframework.data.annotation.CreatedDate;
@@ -36,6 +33,7 @@ public abstract class BaseEntity implements Serializable {
 
     @Version
     @Column(name = "version", nullable = false)
+    @Builder.Default
     private Long version = 0L;
 
     @CreatedDate
@@ -55,6 +53,7 @@ public abstract class BaseEntity implements Serializable {
     private String updatedBy;
 
     @Column(name = "is_deleted", nullable = false)
+    @Builder.Default
     private Boolean isDeleted = false;
 
     @Column(name = "deleted_at")
@@ -81,18 +80,36 @@ public abstract class BaseEntity implements Serializable {
         this.deletedBy = null;
     }
 
+    /**
+     * Ensures default values are set before persisting.
+     * This acts as a safety net for any mapping issues.
+     */
     @PrePersist
     protected void onCreate() {
+        // Set audit timestamps
         if (createdAt == null) {
             createdAt = Instant.now();
         }
         if (updatedAt == null) {
             updatedAt = Instant.now();
         }
+
+        // Ensure critical fields are never null
+        if (isDeleted == null) {
+            isDeleted = false;
+        }
+        if (version == null) {
+            version = 0L;
+        }
     }
 
     @PreUpdate
     protected void onUpdate() {
         updatedAt = Instant.now();
+
+        // Safety check for critical fields during updates
+        if (isDeleted == null) {
+            isDeleted = false;
+        }
     }
 }
