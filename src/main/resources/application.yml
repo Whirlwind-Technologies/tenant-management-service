@@ -209,17 +209,11 @@ app:
       retry-delay-seconds: 60
 
     # Database provisioning settings
-    database:
-      host: ${DB_HOST:localhost}
-      port: ${DB_PORT:5432}
-      admin-username: ${DB_ADMIN_USERNAME:postgres}
-      admin-password: ${DB_ADMIN_PASSWORD:postgres}
-
-      # Connection pool settings per isolation strategy
-      pool-size:
-        database-per-tenant: 20
-        schema-per-tenant: 15
-        shared-schema: 50
+    admin-datasource:
+      url: ${ADMIN_DB_URL:jdbc:postgresql://localhost:5001/postgres}
+      username: ${ADMIN_DB_USERNAME:${DB_USERNAME:postgres}}
+      password: ${ADMIN_DB_PASSWORD:${DB_PASSWORD:postgres}}
+      driver-class-name: org.postgresql.Driver
 
     # Schema provisioning settings
     schema:

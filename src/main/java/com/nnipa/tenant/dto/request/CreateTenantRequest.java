@@ -1,6 +1,7 @@
 package com.nnipa.tenant.dto.request;
 
 import com.nnipa.tenant.enums.OrganizationType;
+import com.nnipa.tenant.enums.TenantIsolationStrategy;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.*;
 import lombok.AllArgsConstructor;
@@ -8,7 +9,9 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * Request DTO for creating a new tenant.
@@ -139,4 +142,19 @@ public class CreateTenantRequest {
 
     @Schema(description = "Send welcome email", defaultValue = "true")
     private Boolean sendWelcomeEmail;
+
+    @Schema(description = "Security level (LOW, MEDIUM, HIGH, CRITICAL)")
+    private String securityLevel;
+
+    @Schema(description = "Isolation strategy override")
+    private TenantIsolationStrategy isolationStrategy;
+
+    @Schema(description = "Additional metadata as key-value pairs")
+    private Map<String, String> metadata;
+
+    @Schema(description = "Parent tenant ID for hierarchical organizations")
+    private UUID parentTenantId;
+
+    @Schema(description = "Skip automatic compliance assignment", defaultValue = "false")
+    private Boolean skipComplianceAutoAssignment;
 }

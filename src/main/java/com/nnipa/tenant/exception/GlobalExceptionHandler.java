@@ -379,4 +379,40 @@ public class GlobalExceptionHandler {
 
         return sb.toString();
     }
+
+    @ExceptionHandler(DuplicateTenantException.class)
+    public ResponseEntity<ApiResponse<Void>> handleDuplicateTenantException(
+            DuplicateTenantException ex, HttpServletRequest request) {
+
+        log.error("Duplicate tenant: {}", ex.getMessage());
+
+        ApiResponse<Void> response = ApiResponse.error(
+                ex.getMessage(),
+                ApiResponse.ErrorDetails.builder()
+                        .code(ex.getErrorCode())
+                        .details(ex.getMessage())
+                        .build()
+        );
+        response.setRequestId(generateRequestId());
+
+        return ResponseEntity.status(ex.getHttpStatus()).body(response);
+    }
+
+    @ExceptionHandler(ValidationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleValidationException(
+            ValidationException ex, HttpServletRequest request) {
+
+        log.error("Validation error: {}", ex.getMessage());
+
+        ApiResponse<Void> response = ApiResponse.error(
+                "Validation failed",
+                ApiResponse.ErrorDetails.builder()
+                        .code(ex.getErrorCode())
+                        .details(ex.getMessage())
+                        .build()
+        );
+        response.setRequestId(generateRequestId());
+
+        return ResponseEntity.status(ex.getHttpStatus()).body(response);
+    }
 }

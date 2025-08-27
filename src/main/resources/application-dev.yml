@@ -80,6 +80,20 @@ app:
     billing-service-url: http://localhost:8082
     notification-service-url: http://localhost:8083
 
+    # Admin database connection for creating/managing tenant databases
+    admin-datasource:
+      url: ${ADMIN_DB_URL:jdbc:postgresql://localhost:5001/postgres}
+      username: ${ADMIN_DB_USERNAME:postgres}
+      password: ${ADMIN_DB_PASSWORD:postgres}
+      driver-class-name: org.postgresql.Driver
+
+    # Provisioning settings
+    provisioning:
+      auto-activate: false
+      async-provisioning: true
+      retry-max-attempts: 3
+      retry-delay-seconds: 2
+
 # Development-specific features
 debug: true
 trace: false
