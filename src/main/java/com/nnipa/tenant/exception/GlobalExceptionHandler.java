@@ -28,6 +28,9 @@ public class GlobalExceptionHandler {
     /**
      * Handle TenantNotFoundException
      */
+    /**
+     * Handle TenantNotFoundException
+     */
     @ExceptionHandler(TenantNotFoundException.class)
     public ResponseEntity<ApiResponse<Void>> handleTenantNotFoundException(
             TenantNotFoundException ex, HttpServletRequest request) {
@@ -35,7 +38,28 @@ public class GlobalExceptionHandler {
         log.error("Tenant not found: {}", ex.getMessage());
 
         ApiResponse<Void> response = ApiResponse.error(
-                ex.getMessage(),
+                "Tenant not found",
+                ApiResponse.ErrorDetails.builder()
+                        .code(ex.getErrorCode())
+                        .details(ex.getMessage())
+                        .build()
+        );
+        response.setRequestId(generateRequestId());
+
+        return ResponseEntity.status(ex.getHttpStatus()).body(response);
+    }
+
+    /**
+     * Handle DuplicateTenantException
+     */
+    @ExceptionHandler(DuplicateTenantException.class)
+    public ResponseEntity<ApiResponse<Void>> handleDuplicateTenantException(
+            DuplicateTenantException ex, HttpServletRequest request) {
+
+        log.error("Duplicate tenant: {}", ex.getMessage());
+
+        ApiResponse<Void> response = ApiResponse.error(
+                "Duplicate tenant",
                 ApiResponse.ErrorDetails.builder()
                         .code(ex.getErrorCode())
                         .details(ex.getMessage())
@@ -56,7 +80,7 @@ public class GlobalExceptionHandler {
         log.error("Tenant already exists: {}", ex.getMessage());
 
         ApiResponse<Void> response = ApiResponse.error(
-                ex.getMessage(),
+                "Tenant already exists",
                 ApiResponse.ErrorDetails.builder()
                         .code(ex.getErrorCode())
                         .details(ex.getMessage())
@@ -78,6 +102,48 @@ public class GlobalExceptionHandler {
 
         ApiResponse<Void> response = ApiResponse.error(
                 "Validation failed",
+                ApiResponse.ErrorDetails.builder()
+                        .code(ex.getErrorCode())
+                        .details(ex.getMessage())
+                        .build()
+        );
+        response.setRequestId(generateRequestId());
+
+        return ResponseEntity.status(ex.getHttpStatus()).body(response);
+    }
+
+    /**
+     * Handle ValidationException
+     */
+    @ExceptionHandler(ValidationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleValidationException(
+            ValidationException ex, HttpServletRequest request) {
+
+        log.error("Validation error: {}", ex.getMessage());
+
+        ApiResponse<Void> response = ApiResponse.error(
+                "Validation failed",
+                ApiResponse.ErrorDetails.builder()
+                        .code(ex.getErrorCode())
+                        .details(ex.getMessage())
+                        .build()
+        );
+        response.setRequestId(generateRequestId());
+
+        return ResponseEntity.status(ex.getHttpStatus()).body(response);
+    }
+
+    /**
+     * Handle TenantCreationException
+     */
+    @ExceptionHandler(TenantCreationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleTenantCreationException(
+            TenantCreationException ex, HttpServletRequest request) {
+
+        log.error("Tenant creation failed: {}", ex.getMessage());
+
+        ApiResponse<Void> response = ApiResponse.error(
+                "Tenant creation failed",
                 ApiResponse.ErrorDetails.builder()
                         .code(ex.getErrorCode())
                         .details(ex.getMessage())
@@ -262,19 +328,20 @@ public class GlobalExceptionHandler {
         log.error("Data integrity violation: {}", ex.getMessage());
 
         String message = "Data integrity violation";
-        String details = "A database constraint was violated";
+        String details = "Operation violates database constraints";
 
-        // Try to extract more specific information
+        // Try to extract more specific message
         if (ex.getMessage() != null) {
-            if (ex.getMessage().contains("duplicate key")) {
+            if (ex.getMessage().contains("duplicate key") ||
+                    ex.getMessage().contains("unique constraint")) {
                 message = "Duplicate entry";
-                details = "A record with this information already exists";
+                details = "A record with the same unique values already exists";
             } else if (ex.getMessage().contains("foreign key")) {
                 message = "Reference constraint violation";
-                details = "This operation would violate a reference constraint";
-            } else if (ex.getMessage().contains("cannot be null")) {
+                details = "Operation violates foreign key constraints";
+            } else if (ex.getMessage().contains("not null")) {
                 message = "Required field missing";
-                details = "A required field is missing or null";
+                details = "A required field cannot be null";
             }
         }
 
@@ -378,41 +445,5 @@ public class GlobalExceptionHandler {
         }
 
         return sb.toString();
-    }
-
-    @ExceptionHandler(DuplicateTenantException.class)
-    public ResponseEntity<ApiResponse<Void>> handleDuplicateTenantException(
-            DuplicateTenantException ex, HttpServletRequest request) {
-
-        log.error("Duplicate tenant: {}", ex.getMessage());
-
-        ApiResponse<Void> response = ApiResponse.error(
-                ex.getMessage(),
-                ApiResponse.ErrorDetails.builder()
-                        .code(ex.getErrorCode())
-                        .details(ex.getMessage())
-                        .build()
-        );
-        response.setRequestId(generateRequestId());
-
-        return ResponseEntity.status(ex.getHttpStatus()).body(response);
-    }
-
-    @ExceptionHandler(ValidationException.class)
-    public ResponseEntity<ApiResponse<Void>> handleValidationException(
-            ValidationException ex, HttpServletRequest request) {
-
-        log.error("Validation error: {}", ex.getMessage());
-
-        ApiResponse<Void> response = ApiResponse.error(
-                "Validation failed",
-                ApiResponse.ErrorDetails.builder()
-                        .code(ex.getErrorCode())
-                        .details(ex.getMessage())
-                        .build()
-        );
-        response.setRequestId(generateRequestId());
-
-        return ResponseEntity.status(ex.getHttpStatus()).body(response);
     }
 }

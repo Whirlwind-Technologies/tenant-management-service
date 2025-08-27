@@ -12,9 +12,12 @@ import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
 import javax.sql.DataSource;
 import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.Base64;
 import java.util.Map;
+import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -47,6 +50,16 @@ public class DatabaseProvisioningService {
     @Value("${app.encryption.key:DefaultEncryptionKey123}")
     private String encryptionKey;
 
+    // Add admin database configuration
+    @Value("${app.tenant.admin-datasource.url:jdbc:postgresql://localhost:5432/postgres}")
+    private String adminDatabaseUrl;
+
+    @Value("${app.tenant.admin-datasource.username:postgres}")
+    private String adminDbUsername;
+
+    @Value("${app.tenant.admin-datasource.password:postgres}")
+    private String adminDbPassword;
+
     // Cache of tenant data sources
     private final Map<String, HikariDataSource> tenantDataSources = new ConcurrentHashMap<>();
 
@@ -59,8 +72,8 @@ public class DatabaseProvisioningService {
         try {
             validateDatabaseName(databaseName);
 
-            // Check if database already exists
-            if (databaseExists(databaseName)) {
+            // Check if database already exists using the admin connection
+            if (databaseExistsViaAdmin(databaseName)) {
                 log.warn("Database {} already exists, skipping creation", databaseName);
                 return;
             }
@@ -87,16 +100,29 @@ public class DatabaseProvisioningService {
 
     /**
      * Creates database using admin connection.
+     * Fixed to use proper admin database URL from configuration
      */
     private void createDatabaseWithAdminConnection(String databaseName) {
         log.debug("Creating database with admin connection: {}", databaseName);
 
-        // Connect to postgres database to create new database
-        String postgresUrl = defaultDatabaseUrl.replace("/tenant_db", "/postgres")
-                .replace("/tenant_db_dev", "/postgres");
+        // Use the configured admin database URL (connects to postgres database)
+        String postgresUrl = extractPostgresUrl(adminDatabaseUrl);
 
-        try (Connection conn = createAdminConnection(postgresUrl)) {
-            Statement stmt = conn.createStatement();
+        log.debug("Using admin connection URL: {}", postgresUrl);
+
+        Connection conn = null;
+        Statement stmt = null;
+
+        try {
+            // Use DriverManager directly for simple admin operations
+            Properties props = new Properties();
+            props.setProperty("user", adminDbUsername);
+            props.setProperty("password", adminDbPassword);
+
+            conn = DriverManager.getConnection(postgresUrl, props);
+            conn.setAutoCommit(true);
+
+            stmt = conn.createStatement();
 
             // Create database with proper settings
             String createDbSql = String.format("""
@@ -108,14 +134,119 @@ public class DatabaseProvisioningService {
                 LC_CTYPE = 'en_US.UTF-8'
                 TEMPLATE = template0
                 CONNECTION LIMIT = -1
-                """, sanitizeIdentifier(databaseName), adminUsername);
+                """, sanitizeIdentifier(databaseName), adminDbUsername);
 
             stmt.execute(createDbSql);
-            log.debug("Database created: {}", databaseName);
+            log.info("Database created successfully: {}", databaseName);
 
         } catch (Exception e) {
             log.error("Failed to create database: {}", databaseName, e);
             throw new DatabaseProvisioningException("Failed to create database: " + databaseName, e);
+        } finally {
+            // Clean up resources
+            if (stmt != null) {
+                try {
+                    stmt.close();
+                } catch (Exception e) {
+                    log.warn("Failed to close statement", e);
+                }
+            }
+            if (conn != null) {
+                try {
+                    conn.close();
+                } catch (Exception e) {
+                    log.warn("Failed to close connection", e);
+                }
+            }
+        }
+    }
+
+    /**
+     * Extracts the postgres database URL from any JDBC URL
+     */
+    private String extractPostgresUrl(String jdbcUrl) {
+        // Extract base URL (protocol, host, port)
+        if (jdbcUrl == null || !jdbcUrl.startsWith("jdbc:postgresql://")) {
+            throw new IllegalArgumentException("Invalid PostgreSQL JDBC URL: " + jdbcUrl);
+        }
+
+        // Find the database name part (after the last /)
+        int lastSlashIndex = jdbcUrl.lastIndexOf('/');
+        if (lastSlashIndex == -1) {
+            throw new IllegalArgumentException("Invalid PostgreSQL JDBC URL format: " + jdbcUrl);
+        }
+
+        // Get the base URL without database name
+        String baseUrl = jdbcUrl.substring(0, lastSlashIndex);
+
+        // Check if there are query parameters
+        int queryParamIndex = jdbcUrl.indexOf('?', lastSlashIndex);
+        String queryParams = "";
+        if (queryParamIndex != -1) {
+            queryParams = jdbcUrl.substring(queryParamIndex);
+        }
+
+        // Return URL pointing to postgres database
+        return baseUrl + "/postgres" + queryParams;
+    }
+
+    /**
+     * Checks if database exists using admin connection
+     */
+    private boolean databaseExistsViaAdmin(String databaseName) {
+        String postgresUrl = extractPostgresUrl(adminDatabaseUrl);
+
+        Connection conn = null;
+        Statement stmt = null;
+        ResultSet rs = null;
+
+        try {
+            Properties props = new Properties();
+            props.setProperty("user", adminDbUsername);
+            props.setProperty("password", adminDbPassword);
+
+            conn = DriverManager.getConnection(postgresUrl, props);
+            stmt = conn.createStatement();
+
+            String checkSql = String.format(
+                    "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = '%s')",
+                    databaseName.toLowerCase()
+            );
+
+            rs = stmt.executeQuery(checkSql);
+            if (rs.next()) {
+                return rs.getBoolean(1);
+            }
+            return false;
+        } catch (Exception e) {
+            log.error("Error checking database existence: {}", databaseName, e);
+            return false;
+        } finally {
+            // Clean up resources
+            if (rs != null) {
+                try { rs.close(); } catch (Exception e) { /* ignore */ }
+            }
+            if (stmt != null) {
+                try { stmt.close(); } catch (Exception e) { /* ignore */ }
+            }
+            if (conn != null) {
+                try { conn.close(); } catch (Exception e) { /* ignore */ }
+            }
+        }
+    }
+
+    /**
+     * Checks if a database exists (fallback method using JdbcTemplate).
+     * This uses the main application database connection.
+     */
+    public boolean databaseExists(String databaseName) {
+        try {
+            String sql = "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = ?)";
+            Boolean exists = jdbcTemplate.queryForObject(sql, Boolean.class, databaseName.toLowerCase());
+            return Boolean.TRUE.equals(exists);
+        } catch (Exception e) {
+            log.warn("Error checking database existence via JdbcTemplate, trying admin connection: {}", e.getMessage());
+            return databaseExistsViaAdmin(databaseName);
         }
     }
 
@@ -127,8 +258,18 @@ public class DatabaseProvisioningService {
 
         String dbUrl = buildDatabaseUrl(databaseName);
 
-        try (Connection conn = createConnection(dbUrl, adminUsername, adminPassword)) {
-            Statement stmt = conn.createStatement();
+        Connection conn = null;
+        Statement stmt = null;
+
+        try {
+            Properties props = new Properties();
+            props.setProperty("user", adminDbUsername);
+            props.setProperty("password", adminDbPassword);
+
+            conn = DriverManager.getConnection(dbUrl, props);
+            conn.setAutoCommit(true);
+
+            stmt = conn.createStatement();
 
             // Enable required extensions
             stmt.execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"");
@@ -146,6 +287,13 @@ public class DatabaseProvisioningService {
         } catch (Exception e) {
             log.error("Failed to initialize database: {}", databaseName, e);
             throw new DatabaseProvisioningException("Failed to initialize database: " + databaseName, e);
+        } finally {
+            if (stmt != null) {
+                try { stmt.close(); } catch (Exception e) { /* ignore */ }
+            }
+            if (conn != null) {
+                try { conn.close(); } catch (Exception e) { /* ignore */ }
+            }
         }
     }
 
@@ -153,118 +301,120 @@ public class DatabaseProvisioningService {
      * Creates base tables in the tenant database.
      */
     private void createBaseTables(Statement stmt) throws Exception {
-        // Create datasets table
+        // Create audit table
         stmt.execute("""
-            CREATE TABLE IF NOT EXISTS app.datasets (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                name VARCHAR(255) NOT NULL,
+            CREATE TABLE IF NOT EXISTS app.audit_log (
+                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                entity_type VARCHAR(100),
+                entity_id VARCHAR(255),
+                action VARCHAR(50),
+                performed_by VARCHAR(255),
+                performed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                old_values JSONB,
+                new_values JSONB,
+                metadata JSONB
+            )
+            """);
+
+        // Create settings table
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS app.tenant_settings (
+                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                key VARCHAR(255) UNIQUE NOT NULL,
+                value TEXT,
+                type VARCHAR(50),
                 description TEXT,
-                data_type VARCHAR(50),
-                source VARCHAR(255),
-                size_bytes BIGINT,
-                row_count BIGINT,
-                column_count INTEGER,
-                metadata JSONB,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP,
-                created_by VARCHAR(255),
-                is_public BOOLEAN DEFAULT FALSE,
-                CONSTRAINT uk_dataset_name UNIQUE (name)
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """);
 
-        // Create statistical_analyses table
-        stmt.execute("""
-            CREATE TABLE IF NOT EXISTS app.statistical_analyses (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                dataset_id UUID REFERENCES app.datasets(id) ON DELETE CASCADE,
-                analysis_type VARCHAR(100) NOT NULL,
-                analysis_name VARCHAR(255),
-                description TEXT,
-                parameters JSONB,
-                results JSONB,
-                status VARCHAR(30),
-                started_at TIMESTAMP,
-                completed_at TIMESTAMP,
-                error_message TEXT,
-                execution_time_ms BIGINT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                created_by VARCHAR(255),
-                CONSTRAINT uk_analysis_name UNIQUE (analysis_name)
-            )
-            """);
+        // Add indexes
+        stmt.execute("CREATE INDEX IF NOT EXISTS idx_audit_entity ON app.audit_log(entity_type, entity_id)");
+        stmt.execute("CREATE INDEX IF NOT EXISTS idx_audit_performed_at ON app.audit_log(performed_at)");
+        stmt.execute("CREATE INDEX IF NOT EXISTS idx_settings_key ON app.tenant_settings(key)");
 
-        // Create reports table
-        stmt.execute("""
-            CREATE TABLE IF NOT EXISTS app.reports (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                analysis_id UUID REFERENCES app.statistical_analyses(id) ON DELETE CASCADE,
-                report_name VARCHAR(255) NOT NULL,
-                report_type VARCHAR(50),
-                format VARCHAR(20),
-                content TEXT,
-                file_path VARCHAR(500),
-                metadata JSONB,
-                generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                generated_by VARCHAR(255),
-                is_published BOOLEAN DEFAULT FALSE,
-                published_at TIMESTAMP,
-                access_count INTEGER DEFAULT 0,
-                CONSTRAINT uk_report_name UNIQUE (report_name)
-            )
-            """);
-
-        // Create indexes
-        stmt.execute("CREATE INDEX idx_datasets_created_at ON app.datasets(created_at DESC)");
-        stmt.execute("CREATE INDEX idx_analyses_dataset_id ON app.statistical_analyses(dataset_id)");
-        stmt.execute("CREATE INDEX idx_analyses_status ON app.statistical_analyses(status)");
-        stmt.execute("CREATE INDEX idx_reports_analysis_id ON app.reports(analysis_id)");
+        log.debug("Base tables created successfully");
     }
 
     /**
-     * Creates a database user specific to the tenant.
+     * Creates a tenant-specific database user.
      */
     private void createTenantDatabaseUser(String databaseName, UUID tenantId) {
         log.debug("Creating database user for tenant: {}", tenantId);
 
-        String username = "tenant_" + tenantId.toString().substring(0, 8);
+        String username = "tenant_" + tenantId.toString().replace("-", "").substring(0, 12);
         String password = generateSecurePassword();
 
-        try (Connection conn = createAdminConnection(buildDatabaseUrl(databaseName))) {
-            Statement stmt = conn.createStatement();
+        String postgresUrl = extractPostgresUrl(adminDatabaseUrl);
 
-            // Create user if not exists
-            stmt.execute(String.format(
-                    "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_user WHERE usename = '%s') THEN " +
-                            "CREATE USER %s WITH PASSWORD '%s'; END IF; END $$;",
-                    username, username, password));
+        Connection conn = null;
+        Statement stmt = null;
+        ResultSet rs = null;
 
-            // Grant connect on database
-            stmt.execute(String.format("GRANT CONNECT ON DATABASE %s TO %s",
-                    sanitizeIdentifier(databaseName), username));
+        try {
+            Properties props = new Properties();
+            props.setProperty("user", adminDbUsername);
+            props.setProperty("password", adminDbPassword);
 
-            // Grant usage on app schema
-            stmt.execute(String.format("GRANT USAGE ON SCHEMA app TO %s", username));
+            conn = DriverManager.getConnection(postgresUrl, props);
+            conn.setAutoCommit(true);
+            stmt = conn.createStatement();
 
-            // Grant all privileges on all tables in app schema
-            stmt.execute(String.format("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA app TO %s", username));
-            stmt.execute(String.format("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA app TO %s", username));
+            // Check if user exists
+            String checkUserSql = String.format(
+                    "SELECT 1 FROM pg_user WHERE usename = '%s'",
+                    username
+            );
 
-            // Set default privileges for future objects
-            stmt.execute(String.format(
-                    "ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT ALL ON TABLES TO %s", username));
-            stmt.execute(String.format(
-                    "ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT ALL ON SEQUENCES TO %s", username));
+            rs = stmt.executeQuery(checkUserSql);
+            if (!rs.next()) {
+                // Create user
+                String createUserSql = String.format(
+                        "CREATE USER %s WITH PASSWORD '%s'",
+                        sanitizeIdentifier(username),
+                        password
+                );
+                stmt.execute(createUserSql);
+            }
+            rs.close();
+
+            // Grant privileges
+            String grantSql = String.format(
+                    "GRANT ALL PRIVILEGES ON DATABASE %s TO %s",
+                    sanitizeIdentifier(databaseName),
+                    sanitizeIdentifier(username)
+            );
+            stmt.execute(grantSql);
 
             log.debug("Database user created: {}", username);
 
-            // Store encrypted password in tenant record (would be done by caller)
-            // This is just for demonstration - actual implementation would update tenant record
+            // Store encrypted password for future use
+            storeEncryptedCredentials(tenantId, username, password);
 
         } catch (Exception e) {
             log.error("Failed to create database user for tenant: {}", tenantId, e);
-            // Non-critical, continue
+            // Continue without failing - use admin credentials
+        } finally {
+            if (rs != null) {
+                try { rs.close(); } catch (Exception e) { /* ignore */ }
+            }
+            if (stmt != null) {
+                try { stmt.close(); } catch (Exception e) { /* ignore */ }
+            }
+            if (conn != null) {
+                try { conn.close(); } catch (Exception e) { /* ignore */ }
+            }
         }
+    }
+
+    /**
+     * Stores encrypted database credentials for a tenant.
+     */
+    private void storeEncryptedCredentials(UUID tenantId, String username, String password) {
+        // Implementation would store these securely, possibly in a separate credentials table
+        // For now, just log that we would store them
+        log.debug("Would store encrypted credentials for tenant: {}", tenantId);
     }
 
     /**
@@ -276,7 +426,7 @@ public class DatabaseProvisioningService {
         try {
             validateDatabaseName(databaseName);
 
-            if (!databaseExists(databaseName)) {
+            if (!databaseExistsViaAdmin(databaseName)) {
                 log.warn("Database {} does not exist, skipping deletion", databaseName);
                 return;
             }
@@ -287,11 +437,30 @@ public class DatabaseProvisioningService {
             // Remove from cache
             removeTenantDataSource(databaseName);
 
-            // Drop database
-            try (Connection conn = createAdminConnection(defaultDatabaseUrl.replace("/tenant_db", "/postgres"))) {
-                Statement stmt = conn.createStatement();
+            String postgresUrl = extractPostgresUrl(adminDatabaseUrl);
+
+            Connection conn = null;
+            Statement stmt = null;
+
+            try {
+                Properties props = new Properties();
+                props.setProperty("user", adminDbUsername);
+                props.setProperty("password", adminDbPassword);
+
+                conn = DriverManager.getConnection(postgresUrl, props);
+                conn.setAutoCommit(true);
+                stmt = conn.createStatement();
+
                 stmt.execute("DROP DATABASE IF EXISTS " + sanitizeIdentifier(databaseName));
                 log.info("Database {} dropped successfully", databaseName);
+
+            } finally {
+                if (stmt != null) {
+                    try { stmt.close(); } catch (Exception e) { /* ignore */ }
+                }
+                if (conn != null) {
+                    try { conn.close(); } catch (Exception e) { /* ignore */ }
+                }
             }
 
         } catch (Exception e) {
@@ -301,24 +470,22 @@ public class DatabaseProvisioningService {
     }
 
     /**
-     * Checks if a database exists.
-     */
-    public boolean databaseExists(String databaseName) {
-        try {
-            String sql = "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = ?)";
-            Boolean exists = jdbcTemplate.queryForObject(sql, Boolean.class, databaseName.toLowerCase());
-            return Boolean.TRUE.equals(exists);
-        } catch (Exception e) {
-            log.error("Error checking database existence: {}", databaseName, e);
-            return false;
-        }
-    }
-
-    /**
      * Terminates all connections to a database.
      */
     private void terminateDatabaseConnections(String databaseName) {
+        String postgresUrl = extractPostgresUrl(adminDatabaseUrl);
+
+        Connection conn = null;
+        Statement stmt = null;
+
         try {
+            Properties props = new Properties();
+            props.setProperty("user", adminDbUsername);
+            props.setProperty("password", adminDbPassword);
+
+            conn = DriverManager.getConnection(postgresUrl, props);
+            stmt = conn.createStatement();
+
             String sql = String.format("""
                 SELECT pg_terminate_backend(pg_stat_activity.pid)
                 FROM pg_stat_activity
@@ -326,11 +493,18 @@ public class DatabaseProvisioningService {
                 AND pid <> pg_backend_pid()
                 """, databaseName);
 
-            jdbcTemplate.execute(sql);
+            stmt.execute(sql);
             log.debug("Terminated connections to database: {}", databaseName);
 
         } catch (Exception e) {
             log.warn("Failed to terminate connections to database: {}", databaseName, e);
+        } finally {
+            if (stmt != null) {
+                try { stmt.close(); } catch (Exception e) { /* ignore */ }
+            }
+            if (conn != null) {
+                try { conn.close(); } catch (Exception e) { /* ignore */ }
+            }
         }
     }
 
@@ -349,8 +523,8 @@ public class DatabaseProvisioningService {
             // Create new data source
             HikariConfig config = new HikariConfig();
             config.setJdbcUrl(buildDatabaseUrl(databaseName));
-            config.setUsername(adminUsername);
-            config.setPassword(adminPassword);
+            config.setUsername(adminDbUsername);
+            config.setPassword(adminDbPassword);
             config.setDriverClassName("org.postgresql.Driver");
 
             // Connection pool settings
@@ -400,61 +574,31 @@ public class DatabaseProvisioningService {
         }
     }
 
-    /**
-     * Gets database statistics for a tenant database.
-     */
-    public DatabaseStatistics getDatabaseStatistics(String databaseName) {
-        try {
-            String sql = """
-                SELECT 
-                    pg_database_size(?) as size_bytes,
-                    (SELECT count(*) FROM pg_stat_activity WHERE datname = ?) as active_connections,
-                    (SELECT count(*) FROM information_schema.tables 
-                     WHERE table_catalog = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')) as table_count
-                """;
-
-            return jdbcTemplate.queryForObject(sql,
-                    (rs, rowNum) -> DatabaseStatistics.builder()
-                            .databaseName(databaseName)
-                            .sizeBytes(rs.getLong("size_bytes"))
-                            .activeConnections(rs.getInt("active_connections"))
-                            .tableCount(rs.getInt("table_count"))
-                            .build(),
-                    databaseName, databaseName, databaseName);
-
-        } catch (Exception e) {
-            log.error("Failed to get database statistics: {}", databaseName, e);
-            return DatabaseStatistics.builder()
-                    .databaseName(databaseName)
-                    .sizeBytes(0L)
-                    .activeConnections(0)
-                    .tableCount(0)
-                    .build();
-        }
-    }
-
-    /**
-     * Creates a connection with the given URL and credentials.
-     */
-    private Connection createConnection(String url, String username, String password) throws Exception {
-        HikariConfig config = new HikariConfig();
-        config.setJdbcUrl(url);
-        config.setUsername(username);
-        config.setPassword(password);
-        config.setMinimumIdle(1);
-        config.setMaximumPoolSize(1);
-        config.setConnectionTimeout(5000);
-
-        try (HikariDataSource ds = new HikariDataSource(config)) {
-            return ds.getConnection();
-        }
-    }
+//    /**
+//     * Creates a connection with the given URL and credentials.
+//     */
+//    private Connection createConnection(String url, String username, String password) throws Exception {
+//        HikariConfig config = new HikariConfig();
+//        config.setJdbcUrl(url);
+//        config.setUsername(username);
+//        config.setPassword(password);
+//        config.setMinimumIdle(1);
+//        config.setMaximumPoolSize(1);
+//        config.setConnectionTimeout(5000);
+//
+//        try (HikariDataSource ds = new HikariDataSource(config)) {
+//            return ds.getConnection();
+//        }
+//    }
 
     /**
      * Creates an admin connection.
      */
     private Connection createAdminConnection(String url) throws Exception {
-        return createConnection(url, adminUsername, adminPassword);
+        Properties props = new Properties();
+        props.setProperty("user", adminDbUsername);
+        props.setProperty("password", adminDbPassword);
+        return DriverManager.getConnection(url, props);
     }
 
     /**
@@ -538,36 +682,39 @@ public class DatabaseProvisioningService {
     }
 
     /**
-     * Decrypts a password.
+     * Gets database statistics for a tenant database.
      */
-    public String decryptPassword(String encryptedPassword) {
+    public DatabaseStatistics getDatabaseStatistics(String databaseName) {
         try {
-            SecretKeySpec key = new SecretKeySpec(encryptionKey.getBytes(), "AES");
-            Cipher cipher = Cipher.getInstance("AES");
-            cipher.init(Cipher.DECRYPT_MODE, key);
-            byte[] decrypted = cipher.doFinal(Base64.getDecoder().decode(encryptedPassword));
-            return new String(decrypted);
+            String sql = """
+                SELECT 
+                    pg_database_size(?) as size_bytes,
+                    (SELECT count(*) FROM pg_stat_activity WHERE datname = ?) as active_connections,
+                    (SELECT count(*) FROM information_schema.tables 
+                     WHERE table_catalog = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')) as table_count
+                """;
+
+            return jdbcTemplate.queryForObject(sql,
+                    (rs, rowNum) -> DatabaseStatistics.builder()
+                            .databaseName(databaseName)
+                            .sizeBytes(rs.getLong("size_bytes"))
+                            .activeConnections(rs.getInt("active_connections"))
+                            .tableCount(rs.getInt("table_count"))
+                            .build(),
+                    databaseName, databaseName, databaseName);
+
         } catch (Exception e) {
-            log.error("Failed to decrypt password", e);
-            throw new DatabaseProvisioningException("Failed to decrypt password", e);
+            log.error("Failed to get database statistics: {}", databaseName, e);
+            return DatabaseStatistics.builder()
+                    .databaseName(databaseName)
+                    .sizeBytes(0L)
+                    .activeConnections(0)
+                    .tableCount(0)
+                    .build();
         }
     }
 
-    /**
-     * Database statistics DTO.
-     */
-    @lombok.Builder
-    @lombok.Data
-    public static class DatabaseStatistics {
-        private String databaseName;
-        private long sizeBytes;
-        private int activeConnections;
-        private int tableCount;
-    }
-
-    /**
-     * Custom exception for database provisioning operations.
-     */
+    // Nested exception class
     public static class DatabaseProvisioningException extends RuntimeException {
         public DatabaseProvisioningException(String message) {
             super(message);
@@ -575,6 +722,54 @@ public class DatabaseProvisioningService {
 
         public DatabaseProvisioningException(String message, Throwable cause) {
             super(message, cause);
+        }
+    }
+
+    // Database statistics builder
+    public static class DatabaseStatistics {
+        private String databaseName;
+        private Long sizeBytes;
+        private Integer activeConnections;
+        private Integer tableCount;
+
+        public static DatabaseStatisticsBuilder builder() {
+            return new DatabaseStatisticsBuilder();
+        }
+
+        public static class DatabaseStatisticsBuilder {
+            private String databaseName;
+            private Long sizeBytes;
+            private Integer activeConnections;
+            private Integer tableCount;
+
+            public DatabaseStatisticsBuilder databaseName(String databaseName) {
+                this.databaseName = databaseName;
+                return this;
+            }
+
+            public DatabaseStatisticsBuilder sizeBytes(Long sizeBytes) {
+                this.sizeBytes = sizeBytes;
+                return this;
+            }
+
+            public DatabaseStatisticsBuilder activeConnections(Integer activeConnections) {
+                this.activeConnections = activeConnections;
+                return this;
+            }
+
+            public DatabaseStatisticsBuilder tableCount(Integer tableCount) {
+                this.tableCount = tableCount;
+                return this;
+            }
+
+            public DatabaseStatistics build() {
+                DatabaseStatistics stats = new DatabaseStatistics();
+                stats.databaseName = this.databaseName;
+                stats.sizeBytes = this.sizeBytes;
+                stats.activeConnections = this.activeConnections;
+                stats.tableCount = this.tableCount;
+                return stats;
+            }
         }
     }
 }

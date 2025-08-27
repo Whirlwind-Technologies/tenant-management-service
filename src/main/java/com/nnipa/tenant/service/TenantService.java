@@ -6,6 +6,7 @@ import com.nnipa.tenant.entity.TenantSettings;
 import com.nnipa.tenant.enums.ComplianceFramework;
 import com.nnipa.tenant.enums.OrganizationType;
 import com.nnipa.tenant.enums.TenantStatus;
+import com.nnipa.tenant.exception.*;
 import com.nnipa.tenant.repository.TenantRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -77,8 +78,9 @@ public class TenantService {
 
             return tenant;
 
-        } catch (DuplicateTenantException e) {
-            log.error("Duplicate tenant detected: {}", e.getMessage());
+        } catch (DuplicateTenantException | TenantValidationException | ValidationException e) {
+            // These are expected validation exceptions - just rethrow them
+            log.error("Tenant validation failed: {}", e.getMessage());
             throw e;
         } catch (Exception e) {
             log.error("Failed to create tenant: {}", tenant.getName(), e);
@@ -88,6 +90,10 @@ public class TenantService {
                 rollbackTenantCreation(tenant);
             }
 
+            // Wrap in TenantCreationException if not already a TenantException
+            if (e instanceof TenantException) {
+                throw (TenantException) e;
+            }
             throw new TenantCreationException("Failed to create tenant: " + e.getMessage(), e);
         }
     }
@@ -98,7 +104,7 @@ public class TenantService {
         log.info("Updating tenant: {}", id);
 
         Tenant tenant = tenantRepository.findById(id)
-                .orElseThrow(() -> new TenantNotFoundException("Tenant not found: " + id));
+                .orElseThrow(() -> new TenantNotFoundException("Tenant not found with ID: " + id));
 
         // Update allowed fields
         if (updates.getName() != null) {
@@ -111,6 +117,13 @@ public class TenantService {
             tenant.setDescription(updates.getDescription());
         }
         if (updates.getOrganizationEmail() != null) {
+            // Check if email is being changed and validate uniqueness
+            if (!tenant.getOrganizationEmail().equals(updates.getOrganizationEmail())) {
+                if (tenantRepository.existsByOrganizationEmail(updates.getOrganizationEmail())) {
+                    throw new DuplicateTenantException("Organization email already registered: " +
+                            updates.getOrganizationEmail());
+                }
+            }
             tenant.setOrganizationEmail(updates.getOrganizationEmail());
         }
         if (updates.getOrganizationPhone() != null) {
@@ -135,24 +148,20 @@ public class TenantService {
         log.info("Activating tenant: {}", id);
 
         Tenant tenant = tenantRepository.findById(id)
-                .orElseThrow(() -> new TenantNotFoundException("Tenant not found: " + id));
+                .orElseThrow(() -> new TenantNotFoundException("Tenant not found with ID: " + id));
 
         if (!tenant.getStatus().canTransitionTo(TenantStatus.ACTIVE)) {
-            throw new IllegalStateException("Cannot activate tenant in status: " + tenant.getStatus());
+            throw new InvalidTenantStatusException(
+                    tenant.getStatus().toString(),
+                    TenantStatus.ACTIVE.toString()
+            );
         }
 
         tenant.setStatus(TenantStatus.ACTIVE);
         tenant.setActivatedAt(Instant.now());
         tenant = tenantRepository.save(tenant);
 
-        // Send notification
-        notificationClient.sendNotification(
-                tenant.getId(),
-                NotificationServiceClient.NotificationType.TENANT_ACTIVATED,
-                Map.of("tenantName", tenant.getName())
-        );
-
-        log.info("Tenant activated: {}", id);
+        log.info("Tenant activated successfully: {}", id);
         return tenant;
     }
 
@@ -230,6 +239,33 @@ public class TenantService {
         log.warn("Tenant marked for deletion: {}", id);
     }
 
+    @Transactional
+    @CacheEvict(value = "tenants", key = "#id")
+    public void deleteTenant(UUID id) {
+        log.info("Deleting tenant: {}", id);
+
+        Tenant tenant = tenantRepository.findById(id)
+                .orElseThrow(() -> new TenantNotFoundException("Tenant not found with ID: " + id));
+
+        // Check if tenant can be deleted
+        if (tenant.getStatus() == TenantStatus.ACTIVE) {
+            throw new InvalidTenantStatusException(
+                    tenant.getStatus().toString(),
+                    "DELETED"
+            );
+        }
+
+        // Soft delete
+        tenant.setIsDeleted(true);
+        tenant.setDeletedAt(Instant.now());
+        tenantRepository.save(tenant);
+
+        // Deprovision resources
+        provisioningService.deprovisionTenant(tenant);
+
+        log.info("Tenant deleted successfully: {}", id);
+    }
+
 
     public Optional<Tenant> getTenantById(UUID id) {
         log.debug("Fetching tenant by ID: {}", id);
@@ -244,13 +280,15 @@ public class TenantService {
     public Tenant findByCodeOrId(String identifier) {
         log.debug("Finding tenant by code or ID: {}", identifier);
 
-        // Try as UUID first
+        // Try to parse as UUID first
         try {
             UUID id = UUID.fromString(identifier);
-            return tenantRepository.findById(id).orElse(null);
+            return tenantRepository.findById(id)
+                    .orElseThrow(() -> new TenantNotFoundException("Tenant not found with ID: " + identifier));
         } catch (IllegalArgumentException e) {
-            // Not a UUID, try as code
-            return tenantRepository.findByTenantCode(identifier).orElse(null);
+            // Not a UUID, try as tenant code
+            return tenantRepository.findByTenantCode(identifier)
+                    .orElseThrow(() -> new TenantNotFoundException("Tenant not found with code: " + identifier));
         }
     }
 
@@ -316,12 +354,6 @@ public class TenantService {
         return prefix + "-" + timestamp;
     }
 
-    public static class TenantNotFoundException extends RuntimeException {
-        public TenantNotFoundException(String message) {
-            super(message);
-        }
-    }
-
     public static class TenantStatistics {
         private final long totalTenants;
         private final long activeTenants;
@@ -356,6 +388,15 @@ public class TenantService {
                 throw new DuplicateTenantException("Organization email already registered: " +
                         tenant.getOrganizationEmail());
             }
+        }
+
+        // Validate required fields
+        if (tenant.getName() == null || tenant.getName().trim().isEmpty()) {
+            throw new TenantValidationException("Tenant name is required");
+        }
+
+        if (tenant.getOrganizationEmail() == null || tenant.getOrganizationEmail().trim().isEmpty()) {
+            throw new TenantValidationException("Organization email is required");
         }
 
         // Validate organization type specific requirements
@@ -446,11 +487,14 @@ public class TenantService {
         log.info("Retrying provisioning for tenant: {}", tenantId);
 
         Tenant tenant = tenantRepository.findById(tenantId)
-                .orElseThrow(() -> new TenantNotFoundException("Tenant not found: " + tenantId));
+                .orElseThrow(() -> new TenantNotFoundException("Tenant not found with ID: " + tenantId));
 
         if (tenant.getStatus() != TenantStatus.PROVISIONING_FAILED &&
                 tenant.getStatus() != TenantStatus.CREATION_FAILED) {
-            throw new IllegalStateException("Tenant is not in failed state: " + tenant.getStatus());
+            throw new InvalidTenantStatusException(
+                    tenant.getStatus().toString(),
+                    TenantStatus.PENDING_VERIFICATION.toString()
+            );
         }
 
         // Reset status and retry
@@ -459,30 +503,5 @@ public class TenantService {
 
         log.info("Provisioning retry completed for tenant: {}", tenant.getName());
         return tenant;
-    }
-
-    /**
-     * Custom exceptions.
-     */
-    public static class DuplicateTenantException extends RuntimeException {
-        public DuplicateTenantException(String message) {
-            super(message);
-        }
-    }
-
-    public static class TenantCreationException extends RuntimeException {
-        public TenantCreationException(String message) {
-            super(message);
-        }
-
-        public TenantCreationException(String message, Throwable cause) {
-            super(message, cause);
-        }
-    }
-
-    public static class ValidationException extends RuntimeException {
-        public ValidationException(String message) {
-            super(message);
-        }
     }
 }

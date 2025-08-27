@@ -6,11 +6,20 @@ spring:
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:dev}
 
-  # Database Configuration
+  # ============================================================================
+  # DATABASE CONNECTION #1: Main Application Database
+  # ============================================================================
+  # This is where the tenant management system stores its own data:
+  # - Tenant metadata (tenant records, settings, subscriptions)
+  # - User information
+  # - Audit logs for the management system itself
+  # - System configuration
+  # This database is SHARED across all tenants for management purposes
+  # ============================================================================
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/tenant_db_dev}
-    username: ${DB_USERNAME:tenant_user}
-    password: ${DB_PASSWORD:tenant_pass}
+    username: ${DB_USERNAME:tenant_dev}
+    password: ${DB_PASSWORD:dev_password}
     driver-class-name: org.postgresql.Driver
     hikari:
       connection-timeout: 30000
@@ -18,19 +27,9 @@ spring:
       minimum-idle: 5
       idle-timeout: 600000
       max-lifetime: 1800000
+      pool-name: "MainAppPool"
 
-  # Jackson Configuration
-  jackson:
-    default-property-inclusion: non_null
-    serialization:
-      write-dates-as-timestamps: false
-      indent-output: false
-    deserialization:
-      fail-on-unknown-properties: false
-    time-zone: UTC
-    date-format: yyyy-MM-dd'T'HH:mm:ss.SSS'Z'
-
-  # JPA Configuration
+  # JPA Configuration (uses the main datasource above)
   jpa:
     hibernate:
       ddl-auto: validate
@@ -44,11 +43,22 @@ spring:
         order_inserts: true
         order_updates: true
 
-  # Flyway Configuration
+  # Flyway Configuration (uses the main datasource above)
   flyway:
     enabled: true
     baseline-on-migrate: true
     locations: classpath:db/migration
+
+  # Jackson Configuration
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+      indent-output: false
+    deserialization:
+      fail-on-unknown-properties: false
+    time-zone: UTC
+    date-format: yyyy-MM-dd'T'HH:mm:ss.SSS'Z'
 
   # Redis Cache Configuration
   data:
@@ -70,150 +80,58 @@ spring:
       time-to-live: 600000
       cache-null-values: false
       use-key-prefix: true
-      key-prefix: "nnipa:tenant:"
-
-# Service Integration Configuration
-services:
-  # Authentication Service
-  auth:
-    url: ${AUTH_SERVICE_URL:http://auth-service:8080}
-    timeout: 5000
-    retry:
-      max-attempts: 3
-      backoff: 1000
-
-  # Authorization Service
-  authorization:
-    url: ${AUTHZ_SERVICE_URL:http://authz-service:8080}
-    timeout: 5000
-    retry:
-      max-attempts: 3
-      backoff: 1000
-
-  # Notification Service
-  notification:
-    url: ${NOTIFICATION_SERVICE_URL:http://notification-service:8080}
-    timeout: 3000
-    retry:
-      max-attempts: 2
-      backoff: 500
-    async: true
-
-  # API Gateway (for rate limiting info)
-  api-gateway:
-    url: ${API_GATEWAY_URL:http://api-gateway:8080}
-    internal-url: ${API_GATEWAY_INTERNAL_URL:http://api-gateway-internal:8081}
-
-# Circuit Breaker Configuration
-resilience4j:
-  circuitbreaker:
-    instances:
-      auth-service:
-        sliding-window-size: 10
-        failure-rate-threshold: 50
-        wait-duration-in-open-state: 30s
-        permitted-number-of-calls-in-half-open-state: 3
-        automatic-transition-from-open-to-half-open-enabled: true
-
-      authz-service:
-        sliding-window-size: 10
-        failure-rate-threshold: 50
-        wait-duration-in-open-state: 30s
-        permitted-number-of-calls-in-half-open-state: 3
-
-      notification-service:
-        sliding-window-size: 5
-        failure-rate-threshold: 70
-        wait-duration-in-open-state: 20s
-        permitted-number-of-calls-in-half-open-state: 2
-
-  retry:
-    instances:
-      auth-service:
-        max-attempts: 3
-        wait-duration: 1s
-
-      notification-service:
-        max-attempts: 2
-        wait-duration: 500ms
-
-# Management & Monitoring
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,metrics,prometheus,caches
-      base-path: /actuator
-  endpoint:
-    health:
-      show-details: always
-      probes:
-        enabled: true
-  health:
-    db:
-      enabled: true
-    redis:
-      enabled: true
-  metrics:
-    tags:
-      application: ${spring.application.name}
-      environment: ${spring.profiles.active}
-  prometheus:
-    metrics:
-      export:
-        enabled: true
-
-# Logging Configuration
-logging:
-  level:
-    com.nnipa.tenant: ${LOG_LEVEL:INFO}
-    org.springframework.web: ${SPRING_LOG_LEVEL:INFO}
-    org.hibernate: ${HIBERNATE_LOG_LEVEL:WARN}
-  pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
-    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+      key-prefix: "nnipa:"
 
 # Server Configuration
 server:
-  port: ${SERVER_PORT:8082}
+  port: 8080
   servlet:
     context-path: /tenant-management
-  compression:
-    enabled: true
-    mime-types: application/json,application/xml,text/html,text/xml,text/plain
-  error:
-    include-message: always
-    include-binding-errors: always
-
-# OpenAPI/Swagger Configuration
-springdoc:
-  api-docs:
-    path: /api-docs
-  swagger-ui:
-    path: /swagger-ui.html
-    enabled: true
-    operations-sorter: method
-    tags-sorter: alpha
 
 # Application-specific Configuration
 app:
   tenant:
-    # Default tenant isolation strategy for new tenants
-    default-isolation-strategy: SHARED_SCHEMA_ROW_LEVEL
-
-    # Provisioning Configuration
-    provisioning:
-      auto-activate: false  # Auto-activate after provisioning
-      async-provisioning: true  # Use async for long-running operations
-      retry-max-attempts: 3
-      retry-delay-seconds: 60
-
-    # Database provisioning settings
+    # ============================================================================
+    # DATABASE CONNECTION #2: Administrative Database Connection
+    # ============================================================================
+    # This connection is used ONLY for administrative operations:
+    # - Creating new tenant databases (CREATE DATABASE statements)
+    # - Dropping tenant databases (DROP DATABASE statements)
+    # - Managing database users and permissions
+    # - Checking if databases exist
+    #
+    # This MUST connect to the 'postgres' database (PostgreSQL's system database)
+    # with a user that has CREATEDB privileges (usually 'postgres' superuser)
+    # ============================================================================
     admin-datasource:
       url: ${ADMIN_DB_URL:jdbc:postgresql://localhost:5001/postgres}
-      username: ${ADMIN_DB_USERNAME:${DB_USERNAME:postgres}}
-      password: ${ADMIN_DB_PASSWORD:${DB_PASSWORD:postgres}}
+      username: ${ADMIN_DB_USERNAME:postgres}
+      password: ${ADMIN_DB_PASSWORD:postgres}
       driver-class-name: org.postgresql.Driver
+
+    # ============================================================================
+    # CONFIGURATION PARAMETERS (NOT A DATABASE CONNECTION)
+    # ============================================================================
+    # These are just configuration values used when building connection strings
+    # for newly created tenant databases. They are NOT a separate connection.
+    # When a new tenant database is created, these values help construct
+    # the JDBC URL for that tenant's database.
+    # ============================================================================
+    database:
+      host: ${TENANT_DB_HOST:localhost}  # Host where tenant databases will be created
+      port: ${TENANT_DB_PORT:5001}        # Port for tenant database connections
+
+    # Database naming configuration
+    database-prefix: nnipa_    # Prefix for tenant database names (e.g., nnipa_gov_doh_001)
+    schema-prefix: tenant_     # Prefix for tenant schemas (for SCHEMA_PER_TENANT strategy)
+
+    # Cache settings
+    cache-ttl-minutes: 10
+
+    # Provisioning settings
+    trial-period-days: 14
+    auto-activation: false
+    max-activation-attempts: 3
 
     # Schema provisioning settings
     schema:
@@ -245,7 +163,7 @@ app:
       government:
         compliance-frameworks:
           - FISMA
-          - FEDRAMP
+          - FedRAMP
         data-retention-days: 2555  # 7 years
       healthcare:
         compliance-frameworks:
@@ -265,6 +183,17 @@ app:
           - GDPR
         data-retention-days: 365   # 1 year
 
+  # Security Configuration
+  security:
+    jwt-secret: ${JWT_SECRET:your-secret-key}
+    jwt-expiration-ms: 3600000
+
+  # Integration URLs
+  integration:
+    auth-service-url: ${AUTH_SERVICE_URL:http://localhost:8081}
+    billing-service-url: ${BILLING_SERVICE_URL:http://localhost:8082}
+    notification-service-url: ${NOTIFICATION_SERVICE_URL:http://localhost:8083}
+
   # Async processing configuration
   async:
     core-pool-size: 4
@@ -276,20 +205,54 @@ app:
   encryption:
     key: ${ENCRYPTION_KEY:DefaultEncryptionKey123}  # Change in production!
 
-  # Spring async configuration
-  task:
-    execution:
-      pool:
-        core-size: 4
-        max-size: 10
-        queue-capacity: 100
-    scheduling:
-      pool:
-        size: 2
+# Spring task execution configuration
+task:
+  execution:
+    pool:
+      core-size: 4
+      max-size: 10
+      queue-capacity: 100
+  scheduling:
+    pool:
+      size: 2
 
-  # Add logging for provisioning
-  logging:
-    level:
-      com.nnipa.tenant.service.TenantProvisioningService: DEBUG
-      com.nnipa.tenant.service.SchemaManagementService: DEBUG
-      com.nnipa.tenant.service.DatabaseProvisioningService: DEBUG
+# Actuator Configuration
+management:
+  endpoints:
+    web:
+      base-path: /actuator
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+  health:
+    redis:
+      enabled: true
+    db:
+      enabled: true
+
+# API Documentation
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+
+# Logging Configuration
+logging:
+  level:
+    root: INFO
+    com.nnipa: DEBUG
+    com.nnipa.tenant.service.DatabaseProvisioningService: DEBUG
+    com.nnipa.tenant.service.TenantProvisioningService: DEBUG
+    org.springframework.security: WARN
+    org.hibernate: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/tenant-management.log
+    max-size: 10MB
+    max-history: 30
