@@ -1,12 +1,17 @@
 package com.nnipa.tenant.controller;
 
+import com.nnipa.tenant.dto.response.ApiResponse;
+import com.nnipa.tenant.dto.response.TenantResponse;
 import com.nnipa.tenant.entity.Tenant;
 import com.nnipa.tenant.enums.TenantIsolationStrategy;
-import com.nnipa.tenant.enums.TenantStatus;
+import com.nnipa.tenant.mapper.TenantMapper;
 import com.nnipa.tenant.service.TenantProvisioningService;
 import com.nnipa.tenant.service.TenantService;
+import com.nnipa.tenant.util.ResponseUtil;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import lombok.Builder;
+import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -27,10 +32,11 @@ public class TenantProvisioningController {
 
     private final TenantProvisioningService provisioningService;
     private final TenantService tenantService;
+    private final TenantMapper tenantMapper;
 
     @GetMapping("/status")
     @Operation(summary = "Get provisioning status for a tenant")
-    public ResponseEntity<TenantProvisioningService.ProvisioningStatus> getProvisioningStatus(
+    public ResponseEntity<ApiResponse<TenantProvisioningService.ProvisioningStatus>> getProvisioningStatus(
             @PathVariable UUID tenantId) {
 
         log.debug("Getting provisioning status for tenant: {}", tenantId);
@@ -38,32 +44,26 @@ public class TenantProvisioningController {
         TenantProvisioningService.ProvisioningStatus status =
                 provisioningService.getProvisioningStatus(tenantId);
 
-        return ResponseEntity.ok(status);
+        return ResponseUtil.success(status, "Provisioning status retrieved");
     }
 
     @PostMapping("/retry")
     @Operation(summary = "Retry failed provisioning")
-    public ResponseEntity<TenantResponse> retryProvisioning(@PathVariable UUID tenantId) {
+    public ResponseEntity<ApiResponse<TenantResponse>> retryProvisioning(@PathVariable UUID tenantId) {
 
         log.info("Retrying provisioning for tenant: {}", tenantId);
 
         Tenant tenant = tenantService.retryProvisioning(tenantId);
 
-        // Convert to response DTO (assuming TenantResponse exists)
-        TenantResponse response = TenantResponse.builder()
-                .id(tenant.getId())
-                .tenantCode(tenant.getTenantCode())
-                .name(tenant.getName())
-                .status(tenant.getStatus())
-                .isolationStrategy(tenant.getIsolationStrategy())
-                .build();
-
-        return ResponseEntity.ok(response);
+        return ResponseUtil.success(
+                tenantMapper.toResponse(tenant),
+                "Provisioning retry initiated successfully"
+        );
     }
 
     @PostMapping("/validate")
     @Operation(summary = "Validate provisioning for a tenant")
-    public ResponseEntity<ProvisioningValidationResponse> validateProvisioning(
+    public ResponseEntity<ApiResponse<ProvisioningValidationResponse>> validateProvisioning(
             @PathVariable UUID tenantId) {
 
         log.debug("Validating provisioning for tenant: {}", tenantId);
@@ -73,18 +73,21 @@ public class TenantProvisioningController {
 
         boolean isValid = provisioningService.validateProvisioning(tenant);
 
-        return ResponseEntity.ok(ProvisioningValidationResponse.builder()
+        ProvisioningValidationResponse validationResponse = ProvisioningValidationResponse.builder()
                 .tenantId(tenantId)
                 .isValid(isValid)
                 .isolationStrategy(tenant.getIsolationStrategy())
                 .databaseName(tenant.getDatabaseName())
                 .schemaName(tenant.getSchemaName())
-                .build());
+                .build();
+
+        String message = isValid ? "Provisioning validation successful" : "Provisioning validation failed";
+        return ResponseUtil.success(validationResponse, message);
     }
 
     @DeleteMapping("/rollback")
     @Operation(summary = "Rollback provisioning and deprovision tenant resources")
-    public ResponseEntity<Void> rollbackProvisioning(@PathVariable UUID tenantId) {
+    public ResponseEntity<ApiResponse<Void>> rollbackProvisioning(@PathVariable UUID tenantId) {
 
         log.warn("Rolling back provisioning for tenant: {}", tenantId);
 
@@ -93,24 +96,14 @@ public class TenantProvisioningController {
 
         provisioningService.deprovisionTenant(tenant);
 
-        return ResponseEntity.noContent().build();
+        return ResponseUtil.noContent("Provisioning rolled back successfully");
     }
 
     /**
      * Response DTOs
      */
-    @lombok.Builder
-    @lombok.Data
-    public static class TenantResponse {
-        private UUID id;
-        private String tenantCode;
-        private String name;
-        private TenantStatus status;
-        private TenantIsolationStrategy isolationStrategy;
-    }
-
-    @lombok.Builder
-    @lombok.Data
+    @Builder
+    @Data
     public static class ProvisioningValidationResponse {
         private UUID tenantId;
         private boolean isValid;

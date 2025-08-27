@@ -57,6 +57,50 @@ public class FeatureFlagService {
     }
 
     /**
+     * Gets all available features from the feature catalog.
+     * This returns template features that can be enabled for tenants.
+     */
+    public List<FeatureFlag> getAllFeatures() {
+        log.debug("Fetching all available features from catalog");
+
+        List<FeatureFlag> allFeatures = new ArrayList<>();
+
+        for (FeatureDefinition definition : FEATURE_CATALOG.values()) {
+            FeatureFlag templateFeature = FeatureFlag.builder()
+                    .featureCode(definition.code())
+                    .featureName(definition.name())
+                    .category(definition.category())
+                    .isBeta(definition.isBeta())
+                    .isEnabled(false) // Template features are disabled by default
+                    .requiredPlan(definition.minimumPlans().isEmpty() ? null :
+                            definition.minimumPlans().iterator().next().name())
+                    .build();
+
+            // Set default usage limits for template
+            setDefaultUsageLimits(templateFeature, definition);
+
+            allFeatures.add(templateFeature);
+        }
+
+        log.debug("Retrieved {} features from catalog", allFeatures.size());
+        return allFeatures;
+    }
+
+    /**
+     * Sets default usage limits for template features based on feature definition.
+     */
+    private void setDefaultUsageLimits(FeatureFlag feature, FeatureDefinition definition) {
+        // Set default limits that would apply to the most restrictive plan that supports this feature
+        SubscriptionPlan mostRestrictivePlan = definition.minimumPlans().isEmpty() ?
+                SubscriptionPlan.FREEMIUM :
+                definition.minimumPlans().stream()
+                        .min((p1, p2) -> Integer.compare((int) p1.getSlaUptime(), (int) p2.getSlaUptime()))
+                        .orElse(SubscriptionPlan.FREEMIUM);
+
+        setUsageLimits(feature, mostRestrictivePlan);
+    }
+
+    /**
      * Enables a feature for a tenant.
      */
     @Transactional

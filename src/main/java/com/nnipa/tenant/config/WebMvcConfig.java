@@ -6,25 +6,33 @@ import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 /**
- * Web MVC configuration to register the tenant interceptor.
+ * Web MVC configuration to register interceptors
  */
 @Configuration
 @RequiredArgsConstructor
 public class WebMvcConfig implements WebMvcConfigurer {
 
     private final TenantInterceptor tenantInterceptor;
+    private final RequestIdInterceptor requestIdInterceptor;
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
+        // Register RequestIdInterceptor first
+        registry.addInterceptor(requestIdInterceptor)
+                .addPathPatterns("/api/**")
+                .order(1);
+
+        // Register TenantInterceptor second
         registry.addInterceptor(tenantInterceptor)
-                .addPathPatterns("/api/**")  // Apply to all API endpoints
+                .addPathPatterns("/api/**")
                 .excludePathPatterns(
-                        "/api/v1/public/**",      // Public endpoints
-                        "/api/v1/auth/**",        // Authentication endpoints
-                        "/api/v1/register/**",    // Registration endpoints
-                        "/api/v1/health/**",      // Health check endpoints
-                        "/swagger-ui/**",         // API documentation
-                        "/api-docs/**"            // OpenAPI specs
-                );
+                        "/api/v1/public/**",
+                        "/api/v1/auth/**",
+                        "/api/v1/register/**",
+                        "/api/v1/health/**",
+                        "/swagger-ui/**",
+                        "/api-docs/**"
+                )
+                .order(2);
     }
 }

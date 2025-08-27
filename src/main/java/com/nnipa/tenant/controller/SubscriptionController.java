@@ -3,6 +3,7 @@ package com.nnipa.tenant.controller;
 import com.nnipa.tenant.dto.request.ChangePlanRequest;
 import com.nnipa.tenant.dto.request.CreateSubscriptionRequest;
 import com.nnipa.tenant.dto.request.RecordUsageRequest;
+import com.nnipa.tenant.dto.response.ApiResponse;
 import com.nnipa.tenant.dto.response.SubscriptionResponse;
 import com.nnipa.tenant.dto.response.UsageResponse;
 import com.nnipa.tenant.entity.BillingDetails;
@@ -11,6 +12,7 @@ import com.nnipa.tenant.entity.Tenant;
 import com.nnipa.tenant.mapper.SubscriptionMapper;
 import com.nnipa.tenant.service.SubscriptionService;
 import com.nnipa.tenant.service.TenantService;
+import com.nnipa.tenant.util.ResponseUtil;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -39,7 +41,7 @@ public class SubscriptionController {
 
     @PostMapping
     @Operation(summary = "Create subscription")
-    public ResponseEntity<SubscriptionResponse> createSubscription(
+    public ResponseEntity<ApiResponse<SubscriptionResponse>> createSubscription(
             @Valid @RequestBody CreateSubscriptionRequest request) {
 
         log.info("Creating subscription for tenant: {} with plan: {}",
@@ -52,69 +54,89 @@ public class SubscriptionController {
         Subscription subscription = subscriptionService.createSubscription(
                 tenant, request.getPlan(), billingDetails);
 
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(subscriptionMapper.toResponse(subscription));
+        return ResponseUtil.created(
+                subscriptionMapper.toResponse(subscription),
+                String.format("Subscription created with plan: %s", request.getPlan())
+        );
     }
 
     @GetMapping("/{id}")
     @Operation(summary = "Get subscription")
-    public ResponseEntity<SubscriptionResponse> getSubscription(@PathVariable UUID id) {
+    public ResponseEntity<ApiResponse<SubscriptionResponse>> getSubscription(@PathVariable UUID id) {
         log.debug("Fetching subscription: {}", id);
 
-        return subscriptionService.getSubscriptionById(id)
-                .map(subscriptionMapper::toResponse)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+        return ResponseUtil.fromOptional(
+                subscriptionService.getSubscriptionById(id),
+                subscriptionMapper::toResponse,
+                String.format("Subscription with ID '%s' not found", id)
+        );
     }
 
-    @PutMapping("/{id}/plan")
-    @Operation(summary = "Change plan")
-    public ResponseEntity<SubscriptionResponse> changePlan(
+    @PostMapping("/{id}/change-plan")
+    @Operation(summary = "Change subscription plan")
+    public ResponseEntity<ApiResponse<SubscriptionResponse>> changePlan(
             @PathVariable UUID id,
             @Valid @RequestBody ChangePlanRequest request) {
 
-        log.info("Changing plan for subscription: {} to {}", id, request.getNewPlan());
+        log.info("Changing subscription {} to plan: {}", id, request.getNewPlan());
 
-        Subscription subscription = subscriptionService.changePlan(id, request.getNewPlan());
-        return ResponseEntity.ok(subscriptionMapper.toResponse(subscription));
+        Subscription subscription = subscriptionService.changePlan(
+                id, request.getNewPlan());
+
+        return ResponseUtil.success(
+                subscriptionMapper.toResponse(subscription),
+                String.format("Subscription plan changed to: %s", request.getNewPlan())
+        );
     }
 
     @PostMapping("/{id}/cancel")
     @Operation(summary = "Cancel subscription")
-    public ResponseEntity<SubscriptionResponse> cancelSubscription(
+    public ResponseEntity<ApiResponse<SubscriptionResponse>> cancelSubscription(
             @PathVariable UUID id,
             @RequestParam String reason) {
 
         log.info("Canceling subscription: {} (Reason: {})", id, reason);
 
         Subscription subscription = subscriptionService.cancelSubscription(id, reason);
-        return ResponseEntity.ok(subscriptionMapper.toResponse(subscription));
+
+        return ResponseUtil.success(
+                subscriptionMapper.toResponse(subscription),
+                "Subscription cancelled successfully"
+        );
     }
 
     @PostMapping("/{id}/renew")
     @Operation(summary = "Renew subscription")
-    public ResponseEntity<SubscriptionResponse> renewSubscription(@PathVariable UUID id) {
+    public ResponseEntity<ApiResponse<SubscriptionResponse>> renewSubscription(@PathVariable UUID id) {
         log.info("Renewing subscription: {}", id);
 
         Subscription subscription = subscriptionService.renewSubscription(id);
-        return ResponseEntity.ok(subscriptionMapper.toResponse(subscription));
+
+        return ResponseUtil.success(
+                subscriptionMapper.toResponse(subscription),
+                "Subscription renewed successfully"
+        );
     }
 
     @PostMapping("/{id}/usage")
     @Operation(summary = "Record usage")
-    public ResponseEntity<UsageResponse> recordUsage(
+    public ResponseEntity<ApiResponse<UsageResponse>> recordUsage(
             @PathVariable UUID id,
             @Valid @RequestBody RecordUsageRequest request) {
 
         log.debug("Recording usage for subscription: {}", id);
 
         var usageRecord = subscriptionService.recordUsage(id, request);
-        return ResponseEntity.ok(subscriptionMapper.toUsageResponse(usageRecord));
+
+        return ResponseUtil.success(
+                subscriptionMapper.toUsageResponse(usageRecord),
+                "Usage recorded successfully"
+        );
     }
 
     @GetMapping("/{id}/usage")
     @Operation(summary = "Get usage records")
-    public ResponseEntity<List<UsageResponse>> getUsageRecords(
+    public ResponseEntity<ApiResponse<List<UsageResponse>>> getUsageRecords(
             @PathVariable UUID id,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate) {
@@ -126,19 +148,21 @@ public class SubscriptionController {
                 .map(subscriptionMapper::toUsageResponse)
                 .collect(Collectors.toList());
 
-        return ResponseEntity.ok(usage);
+        return ResponseUtil.success(usage,
+                String.format("Found %d usage records", usage.size()));
     }
 
     @GetMapping("/me")
     @Operation(summary = "Get my subscription")
-    public ResponseEntity<SubscriptionResponse> getMySubscription(
+    public ResponseEntity<ApiResponse<SubscriptionResponse>> getMySubscription(
             @RequestHeader("X-Tenant-ID") String tenantId) {
 
         log.debug("Fetching subscription for current tenant: {}", tenantId);
 
-        return subscriptionService.getTenantActiveSubscription(UUID.fromString(tenantId))
-                .map(subscriptionMapper::toResponse)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+        return ResponseUtil.fromOptional(
+                subscriptionService.getTenantActiveSubscription(UUID.fromString(tenantId)),
+                subscriptionMapper::toResponse,
+                "No active subscription found for current tenant"
+        );
     }
 }
