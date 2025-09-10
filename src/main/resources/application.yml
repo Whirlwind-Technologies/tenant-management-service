@@ -43,6 +43,46 @@ spring:
         order_inserts: true
         order_updates: true
 
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+      acks: all
+      retries: 3
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        compression.type: snappy
+        linger.ms: 10
+        batch.size: 32768
+    consumer:
+      group-id: tenant-management-service
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      properties:
+        isolation.level: read_committed
+        session.timeout.ms: 30000
+        heartbeat.interval.ms: 10000
+        max.poll.records: 10
+        max.poll.interval.ms: 300000
+    topics:
+      # Tenant events (produced)
+      tenant-created: nnipa.events.tenant.created
+      tenant-updated: nnipa.events.tenant.updated
+      tenant-deactivated: nnipa.events.tenant.deactivated
+      tenant-migrated: nnipa.events.tenant.migrated
+      tenant-subscription-changed: nnipa.events.tenant.subscription-changed
+      tenant-suspended: nnipa.events.tenant.suspended
+      tenant-reactivated: nnipa.events.tenant.reactivated
+      tenant-limit-exceeded: nnipa.events.tenant.limit-exceeded
+      payment-failed: nnipa.events.billing.payment-failed
+      # External events (consumed)
+      user-created: nnipa.events.user.created
+      billing-payment-failed: nnipa.events.billing.payment-failed
+
   # Flyway Configuration (uses the main datasource above)
   flyway:
     enabled: true

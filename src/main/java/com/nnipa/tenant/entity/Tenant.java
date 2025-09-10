@@ -1,9 +1,6 @@
 package com.nnipa.tenant.entity;
 
-import com.nnipa.tenant.enums.ComplianceFramework;
-import com.nnipa.tenant.enums.OrganizationType;
-import com.nnipa.tenant.enums.TenantIsolationStrategy;
-import com.nnipa.tenant.enums.TenantStatus;
+import com.nnipa.tenant.enums.*;
 import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
@@ -128,8 +125,8 @@ public class Tenant extends BaseEntity {
 
     // Data Isolation Configuration
     @Enumerated(EnumType.STRING)
-    @Column(name = "isolation_strategy", length = 50)
-    private TenantIsolationStrategy isolationStrategy;
+    @Column(name = "isolation_strategy")
+    private IsolationStrategy isolationStrategy;
 
     @Column(name = "database_name", length = 100)
     private String databaseName;
@@ -169,9 +166,12 @@ public class Tenant extends BaseEntity {
     @OneToOne(mappedBy = "tenant", cascade = CascadeType.ALL)
     private TenantSettings settings;
 
-    // Feature Flags
-    @OneToMany(mappedBy = "tenant", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
-    private Set<FeatureFlag> featureFlags = new HashSet<>();
+    @ElementCollection
+    @CollectionTable(name = "tenant_feature_flags",
+            joinColumns = @JoinColumn(name = "tenant_id"))
+    @MapKeyColumn(name = "feature_name")
+    @Column(name = "enabled")
+    private Map<String, Boolean> featureFlags = new HashMap<>();
 
     // Usage and Limits
     @Column(name = "max_users")
@@ -246,6 +246,15 @@ public class Tenant extends BaseEntity {
 
     @Column(name = "encrypted_database_password")
     private String encryptedDatabasePassword;
+
+    @Column(name = "subscription_plan")
+    private String subscriptionPlan;
+
+    @Column(name = "current_users")
+    private Integer currentUsers;
+
+    @Column(name = "next_billing_date")
+    private Instant nextBillingDate;
 
     // Helper Methods
 

@@ -2,547 +2,537 @@ package com.nnipa.tenant.service;
 
 import com.nnipa.tenant.entity.FeatureFlag;
 import com.nnipa.tenant.entity.Tenant;
-import com.nnipa.tenant.enums.OrganizationType;
-import com.nnipa.tenant.enums.SubscriptionPlan;
 import com.nnipa.tenant.repository.FeatureFlagRepository;
+import com.nnipa.tenant.repository.TenantRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
- * Service for managing feature flags per tenant.
- * Controls feature access based on subscription tier, organization type, and custom rules.
+ * Service for managing tenant feature flags.
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
-@Transactional(readOnly = true)
 public class FeatureFlagService {
 
     private final FeatureFlagRepository featureFlagRepository;
+    private final TenantRepository tenantRepository;
 
-    // Feature definitions
-    private static final Map<String, FeatureDefinition> FEATURE_CATALOG = initializeFeatureCatalog();
+    // Feature definitions by plan
+    private static final Map<String, Map<String, Boolean>> PLAN_FEATURES = createPlanFeatures();
 
-    /**
-     * Initializes default features for a tenant based on their organization type and plan.
-     */
-    @Transactional
-    public List<FeatureFlag> initializeTenantFeatures(Tenant tenant) {
-        log.info("Initializing features for tenant: {}", tenant.getName());
+    private static Map<String, Map<String, Boolean>> createPlanFeatures() {
+        Map<String, Map<String, Boolean>> planFeatures = new HashMap<>();
 
-        List<FeatureFlag> features = new ArrayList<>();
-        SubscriptionPlan plan = tenant.getSubscription() != null ?
-                tenant.getSubscription().getPlan() : SubscriptionPlan.FREEMIUM;
+        // ENTERPRISE Plan
+        Map<String, Boolean> enterpriseFeatures = new HashMap<>();
+        // Data Management Features
+        enterpriseFeatures.put("DATA_INGESTION_UNLIMITED", true);
+        enterpriseFeatures.put("DATA_CATALOG_ADVANCED", true);
+        enterpriseFeatures.put("DATA_STORAGE_UNLIMITED", true);
+        enterpriseFeatures.put("DATA_TRANSFORMATION_ADVANCED", true);
+        enterpriseFeatures.put("DATA_QUERY_OPTIMIZATION", true);
+        enterpriseFeatures.put("DATA_LINEAGE_TRACKING", true);
+        enterpriseFeatures.put("DATA_VERSIONING", true);
 
-        for (FeatureDefinition definition : FEATURE_CATALOG.values()) {
-            if (shouldEnableFeature(definition, tenant.getOrganizationType(), plan)) {
-                FeatureFlag feature = createFeatureFlag(tenant, definition, plan);
-                features.add(feature);
-            }
-        }
+        // Statistical Computing Features
+        enterpriseFeatures.put("STATISTICAL_ENGINE_ADVANCED", true);
+        enterpriseFeatures.put("ML_PIPELINE_UNLIMITED", true);
+        enterpriseFeatures.put("ANALYSIS_TEMPLATES_CUSTOM", true);
+        enterpriseFeatures.put("REPORTING_ADVANCED", true);
+        enterpriseFeatures.put("STATISTICAL_MODELING_GPU", true);
+        enterpriseFeatures.put("DISTRIBUTED_COMPUTING", true);
+        enterpriseFeatures.put("R_PYTHON_INTEGRATION", true);
 
-        features = featureFlagRepository.saveAll(features);
-        log.info("Initialized {} features for tenant: {}", features.size(), tenant.getName());
+        // Privacy & Compliance Features
+        enterpriseFeatures.put("PRIVACY_ENFORCEMENT_ADVANCED", true);
+        enterpriseFeatures.put("AUDIT_LOGS_COMPREHENSIVE", true);
+        enterpriseFeatures.put("ENCRYPTION_ADVANCED", true);
+        enterpriseFeatures.put("GDPR_COMPLIANCE", true);
+        enterpriseFeatures.put("HIPAA_COMPLIANCE", true);
+        enterpriseFeatures.put("SOX_COMPLIANCE", true);
+        enterpriseFeatures.put("DATA_ANONYMIZATION", true);
+        enterpriseFeatures.put("DIFFERENTIAL_PRIVACY", true);
 
-        return features;
+        // Data Exchange & Collaboration Features
+        enterpriseFeatures.put("INTEGRATION_UNLIMITED", true);
+        enterpriseFeatures.put("WORKSPACE_UNLIMITED", true);
+        enterpriseFeatures.put("COLLABORATION_ADVANCED", true);
+        enterpriseFeatures.put("CROSS_ORG_SHARING", true);
+        enterpriseFeatures.put("API_UNLIMITED", true);
+        enterpriseFeatures.put("WEBHOOKS_UNLIMITED", true);
+        enterpriseFeatures.put("FEDERATED_LEARNING", true);
+
+        // Visualization & Analytics Features
+        enterpriseFeatures.put("VISUALIZATION_ADVANCED", true);
+        enterpriseFeatures.put("DASHBOARD_UNLIMITED", true);
+        enterpriseFeatures.put("EXPORT_ALL_FORMATS", true);
+        enterpriseFeatures.put("CUSTOM_VISUALIZATIONS", true);
+        enterpriseFeatures.put("REAL_TIME_DASHBOARDS", true);
+        enterpriseFeatures.put("EMBEDDING_WHITELABEL", true);
+
+        // Platform Features
+        enterpriseFeatures.put("MONITORING_ADVANCED", true);
+        enterpriseFeatures.put("LOGGING_COMPREHENSIVE", true);
+        enterpriseFeatures.put("CONFIGURATION_DYNAMIC", true);
+        enterpriseFeatures.put("SCHEDULING_UNLIMITED", true);
+        enterpriseFeatures.put("NOTIFICATIONS_UNLIMITED", true);
+        enterpriseFeatures.put("TENANT_MANAGEMENT_ADVANCED", true);
+        enterpriseFeatures.put("USER_MANAGEMENT_UNLIMITED", true);
+        enterpriseFeatures.put("SSO_ADVANCED", true);
+        enterpriseFeatures.put("RBAC_GRANULAR", true);
+        enterpriseFeatures.put("CUSTOM_BRANDING", true);
+        enterpriseFeatures.put("PRIORITY_SUPPORT", true);
+        enterpriseFeatures.put("SLA_99_9", true);
+        enterpriseFeatures.put("DEDICATED_RESOURCES", true);
+        enterpriseFeatures.put("ON_PREMISE_DEPLOYMENT", true);
+
+        planFeatures.put("ENTERPRISE", Collections.unmodifiableMap(enterpriseFeatures));
+
+        // PROFESSIONAL Plan
+        Map<String, Boolean> professionalFeatures = new HashMap<>();
+        // Data Management Features
+        professionalFeatures.put("DATA_INGESTION_UNLIMITED", true);
+        professionalFeatures.put("DATA_CATALOG_ADVANCED", false);
+        professionalFeatures.put("DATA_STORAGE_UNLIMITED", false); // 1TB limit
+        professionalFeatures.put("DATA_TRANSFORMATION_ADVANCED", true);
+        professionalFeatures.put("DATA_QUERY_OPTIMIZATION", true);
+        professionalFeatures.put("DATA_LINEAGE_TRACKING", true);
+        professionalFeatures.put("DATA_VERSIONING", false);
+
+        // Statistical Computing Features
+        professionalFeatures.put("STATISTICAL_ENGINE_ADVANCED", true);
+        professionalFeatures.put("ML_PIPELINE_UNLIMITED", false); // 50 pipelines limit
+        professionalFeatures.put("ANALYSIS_TEMPLATES_CUSTOM", false);
+        professionalFeatures.put("REPORTING_ADVANCED", true);
+        professionalFeatures.put("STATISTICAL_MODELING_GPU", false);
+        professionalFeatures.put("DISTRIBUTED_COMPUTING", false);
+        professionalFeatures.put("R_PYTHON_INTEGRATION", true);
+
+        // Privacy & Compliance Features
+        professionalFeatures.put("PRIVACY_ENFORCEMENT_ADVANCED", true);
+        professionalFeatures.put("AUDIT_LOGS_COMPREHENSIVE", false); // 90 days retention
+        professionalFeatures.put("ENCRYPTION_ADVANCED", false); // Standard encryption
+        professionalFeatures.put("GDPR_COMPLIANCE", true);
+        professionalFeatures.put("HIPAA_COMPLIANCE", false);
+        professionalFeatures.put("SOX_COMPLIANCE", false);
+        professionalFeatures.put("DATA_ANONYMIZATION", true);
+        professionalFeatures.put("DIFFERENTIAL_PRIVACY", false);
+
+        // Data Exchange & Collaboration Features
+        professionalFeatures.put("INTEGRATION_UNLIMITED", false); // 10 integrations limit
+        professionalFeatures.put("WORKSPACE_UNLIMITED", false); // 25 workspaces limit
+        professionalFeatures.put("COLLABORATION_ADVANCED", true);
+        professionalFeatures.put("CROSS_ORG_SHARING", true);
+        professionalFeatures.put("API_UNLIMITED", false); // 10K calls/month
+        professionalFeatures.put("WEBHOOKS_UNLIMITED", false); // 100 webhooks limit
+        professionalFeatures.put("FEDERATED_LEARNING", false);
+
+        // Visualization & Analytics Features
+        professionalFeatures.put("VISUALIZATION_ADVANCED", true);
+        professionalFeatures.put("DASHBOARD_UNLIMITED", false); // 50 dashboards limit
+        professionalFeatures.put("EXPORT_ALL_FORMATS", true);
+        professionalFeatures.put("CUSTOM_VISUALIZATIONS", false);
+        professionalFeatures.put("REAL_TIME_DASHBOARDS", true);
+        professionalFeatures.put("EMBEDDING_WHITELABEL", false);
+
+        // Platform Features
+        professionalFeatures.put("MONITORING_ADVANCED", false); // Basic monitoring
+        professionalFeatures.put("LOGGING_COMPREHENSIVE", false); // 30 days retention
+        professionalFeatures.put("CONFIGURATION_DYNAMIC", true);
+        professionalFeatures.put("SCHEDULING_UNLIMITED", false); // 100 jobs limit
+        professionalFeatures.put("NOTIFICATIONS_UNLIMITED", false); // Email/Slack only
+        professionalFeatures.put("TENANT_MANAGEMENT_ADVANCED", false);
+        professionalFeatures.put("USER_MANAGEMENT_UNLIMITED", false); // 100 users limit
+        professionalFeatures.put("SSO_ADVANCED", true); // SAML/OIDC
+        professionalFeatures.put("RBAC_GRANULAR", false); // Standard roles
+        professionalFeatures.put("CUSTOM_BRANDING", false);
+        professionalFeatures.put("PRIORITY_SUPPORT", false); // Business hours
+        professionalFeatures.put("SLA_99_9", false); // 99% SLA
+        professionalFeatures.put("DEDICATED_RESOURCES", false);
+        professionalFeatures.put("ON_PREMISE_DEPLOYMENT", false);
+
+        planFeatures.put("PROFESSIONAL", Collections.unmodifiableMap(professionalFeatures));
+
+        // STANDARD Plan
+        Map<String, Boolean> standardFeatures = new HashMap<>();
+        // Data Management Features
+        standardFeatures.put("DATA_INGESTION_UNLIMITED", false); // 100GB/month limit
+        standardFeatures.put("DATA_CATALOG_ADVANCED", false);
+        standardFeatures.put("DATA_STORAGE_UNLIMITED", false); // 500GB limit
+        standardFeatures.put("DATA_TRANSFORMATION_ADVANCED", false);
+        standardFeatures.put("DATA_QUERY_OPTIMIZATION", false);
+        standardFeatures.put("DATA_LINEAGE_TRACKING", false);
+        standardFeatures.put("DATA_VERSIONING", false);
+
+        // Statistical Computing Features
+        standardFeatures.put("STATISTICAL_ENGINE_ADVANCED", false); // Basic stats only
+        standardFeatures.put("ML_PIPELINE_UNLIMITED", false); // 10 pipelines limit
+        standardFeatures.put("ANALYSIS_TEMPLATES_CUSTOM", false);
+        standardFeatures.put("REPORTING_ADVANCED", false); // Standard reports
+        standardFeatures.put("STATISTICAL_MODELING_GPU", false);
+        standardFeatures.put("DISTRIBUTED_COMPUTING", false);
+        standardFeatures.put("R_PYTHON_INTEGRATION", false);
+
+        // Privacy & Compliance Features
+        standardFeatures.put("PRIVACY_ENFORCEMENT_ADVANCED", false); // Basic privacy
+        standardFeatures.put("AUDIT_LOGS_COMPREHENSIVE", false); // 30 days retention
+        standardFeatures.put("ENCRYPTION_ADVANCED", false); // Standard encryption
+        standardFeatures.put("GDPR_COMPLIANCE", true);
+        standardFeatures.put("HIPAA_COMPLIANCE", false);
+        standardFeatures.put("SOX_COMPLIANCE", false);
+        standardFeatures.put("DATA_ANONYMIZATION", false);
+        standardFeatures.put("DIFFERENTIAL_PRIVACY", false);
+
+        // Data Exchange & Collaboration Features
+        standardFeatures.put("INTEGRATION_UNLIMITED", false); // 5 integrations limit
+        standardFeatures.put("WORKSPACE_UNLIMITED", false); // 10 workspaces limit
+        standardFeatures.put("COLLABORATION_ADVANCED", false); // Basic sharing
+        standardFeatures.put("CROSS_ORG_SHARING", false);
+        standardFeatures.put("API_UNLIMITED", false); // 1K calls/month
+        standardFeatures.put("WEBHOOKS_UNLIMITED", false); // 10 webhooks limit
+        standardFeatures.put("FEDERATED_LEARNING", false);
+
+        // Visualization & Analytics Features
+        standardFeatures.put("VISUALIZATION_ADVANCED", false); // Standard charts
+        standardFeatures.put("DASHBOARD_UNLIMITED", false); // 10 dashboards limit
+        standardFeatures.put("EXPORT_ALL_FORMATS", false); // PDF/CSV only
+        standardFeatures.put("CUSTOM_VISUALIZATIONS", false);
+        standardFeatures.put("REAL_TIME_DASHBOARDS", false);
+        standardFeatures.put("EMBEDDING_WHITELABEL", false);
+
+        // Platform Features
+        standardFeatures.put("MONITORING_ADVANCED", false); // Basic monitoring
+        standardFeatures.put("LOGGING_COMPREHENSIVE", false); // 7 days retention
+        standardFeatures.put("CONFIGURATION_DYNAMIC", false);
+        standardFeatures.put("SCHEDULING_UNLIMITED", false); // 20 jobs limit
+        standardFeatures.put("NOTIFICATIONS_UNLIMITED", false); // Email only
+        standardFeatures.put("TENANT_MANAGEMENT_ADVANCED", false);
+        standardFeatures.put("USER_MANAGEMENT_UNLIMITED", false); // 25 users limit
+        standardFeatures.put("SSO_ADVANCED", false); // Basic SSO
+        standardFeatures.put("RBAC_GRANULAR", false); // Predefined roles
+        standardFeatures.put("CUSTOM_BRANDING", false);
+        standardFeatures.put("PRIORITY_SUPPORT", false); // Community support
+        standardFeatures.put("SLA_99_9", false); // Best effort
+        standardFeatures.put("DEDICATED_RESOURCES", false);
+        standardFeatures.put("ON_PREMISE_DEPLOYMENT", false);
+
+        planFeatures.put("STANDARD", Collections.unmodifiableMap(standardFeatures));
+
+        // STARTER Plan
+        Map<String, Boolean> starterFeatures = new HashMap<>();
+        // Data Management Features
+        starterFeatures.put("DATA_INGESTION_UNLIMITED", false); // 10GB/month limit
+        starterFeatures.put("DATA_CATALOG_ADVANCED", false);
+        starterFeatures.put("DATA_STORAGE_UNLIMITED", false); // 50GB limit
+        starterFeatures.put("DATA_TRANSFORMATION_ADVANCED", false);
+        starterFeatures.put("DATA_QUERY_OPTIMIZATION", false);
+        starterFeatures.put("DATA_LINEAGE_TRACKING", false);
+        starterFeatures.put("DATA_VERSIONING", false);
+
+        // Statistical Computing Features
+        starterFeatures.put("STATISTICAL_ENGINE_ADVANCED", false); // Basic stats only
+        starterFeatures.put("ML_PIPELINE_UNLIMITED", false); // 3 pipelines limit
+        starterFeatures.put("ANALYSIS_TEMPLATES_CUSTOM", false);
+        starterFeatures.put("REPORTING_ADVANCED", false); // Basic reports
+        starterFeatures.put("STATISTICAL_MODELING_GPU", false);
+        starterFeatures.put("DISTRIBUTED_COMPUTING", false);
+        starterFeatures.put("R_PYTHON_INTEGRATION", false);
+
+        // Privacy & Compliance Features
+        starterFeatures.put("PRIVACY_ENFORCEMENT_ADVANCED", false); // Basic privacy
+        starterFeatures.put("AUDIT_LOGS_COMPREHENSIVE", false); // 7 days retention
+        starterFeatures.put("ENCRYPTION_ADVANCED", false); // Basic encryption
+        starterFeatures.put("GDPR_COMPLIANCE", false);
+        starterFeatures.put("HIPAA_COMPLIANCE", false);
+        starterFeatures.put("SOX_COMPLIANCE", false);
+        starterFeatures.put("DATA_ANONYMIZATION", false);
+        starterFeatures.put("DIFFERENTIAL_PRIVACY", false);
+
+        // Data Exchange & Collaboration Features
+        starterFeatures.put("INTEGRATION_UNLIMITED", false); // 2 integrations limit
+        starterFeatures.put("WORKSPACE_UNLIMITED", false); // 3 workspaces limit
+        starterFeatures.put("COLLABORATION_ADVANCED", false); // Basic sharing
+        starterFeatures.put("CROSS_ORG_SHARING", false);
+        starterFeatures.put("API_UNLIMITED", false); // 100 calls/month
+        starterFeatures.put("WEBHOOKS_UNLIMITED", false); // 3 webhooks limit
+        starterFeatures.put("FEDERATED_LEARNING", false);
+
+        // Visualization & Analytics Features
+        starterFeatures.put("VISUALIZATION_ADVANCED", false); // Basic charts
+        starterFeatures.put("DASHBOARD_UNLIMITED", false); // 3 dashboards limit
+        starterFeatures.put("EXPORT_ALL_FORMATS", false); // CSV only
+        starterFeatures.put("CUSTOM_VISUALIZATIONS", false);
+        starterFeatures.put("REAL_TIME_DASHBOARDS", false);
+        starterFeatures.put("EMBEDDING_WHITELABEL", false);
+
+        // Platform Features
+        starterFeatures.put("MONITORING_ADVANCED", false); // Basic monitoring
+        starterFeatures.put("LOGGING_COMPREHENSIVE", false); // 3 days retention
+        starterFeatures.put("CONFIGURATION_DYNAMIC", false);
+        starterFeatures.put("SCHEDULING_UNLIMITED", false); // 5 jobs limit
+        starterFeatures.put("NOTIFICATIONS_UNLIMITED", false); // Email only
+        starterFeatures.put("TENANT_MANAGEMENT_ADVANCED", false);
+        starterFeatures.put("USER_MANAGEMENT_UNLIMITED", false); // 5 users limit
+        starterFeatures.put("SSO_ADVANCED", false); // No SSO
+        starterFeatures.put("RBAC_GRANULAR", false); // Basic roles
+        starterFeatures.put("CUSTOM_BRANDING", false);
+        starterFeatures.put("PRIORITY_SUPPORT", false); // Community support
+        starterFeatures.put("SLA_99_9", false); // Best effort
+        starterFeatures.put("DEDICATED_RESOURCES", false);
+        starterFeatures.put("ON_PREMISE_DEPLOYMENT", false);
+
+        planFeatures.put("STARTER", Collections.unmodifiableMap(starterFeatures));
+
+        // TRIAL Plan
+        Map<String, Boolean> trialFeatures = new HashMap<>();
+        // Data Management Features - Very Limited
+        trialFeatures.put("DATA_INGESTION_UNLIMITED", false); // 1GB/month limit
+        trialFeatures.put("DATA_CATALOG_ADVANCED", false);
+        trialFeatures.put("DATA_STORAGE_UNLIMITED", false); // 5GB limit
+        trialFeatures.put("DATA_TRANSFORMATION_ADVANCED", false);
+        trialFeatures.put("DATA_QUERY_OPTIMIZATION", false);
+        trialFeatures.put("DATA_LINEAGE_TRACKING", false);
+        trialFeatures.put("DATA_VERSIONING", false);
+
+        // Statistical Computing Features - Basic Only
+        trialFeatures.put("STATISTICAL_ENGINE_ADVANCED", false); // Descriptive stats only
+        trialFeatures.put("ML_PIPELINE_UNLIMITED", false); // 1 pipeline limit
+        trialFeatures.put("ANALYSIS_TEMPLATES_CUSTOM", false);
+        trialFeatures.put("REPORTING_ADVANCED", false); // Basic reports
+        trialFeatures.put("STATISTICAL_MODELING_GPU", false);
+        trialFeatures.put("DISTRIBUTED_COMPUTING", false);
+        trialFeatures.put("R_PYTHON_INTEGRATION", false);
+
+        // Privacy & Compliance Features - Minimal
+        trialFeatures.put("PRIVACY_ENFORCEMENT_ADVANCED", false);
+        trialFeatures.put("AUDIT_LOGS_COMPREHENSIVE", false); // 3 days retention
+        trialFeatures.put("ENCRYPTION_ADVANCED", false); // Basic encryption
+        trialFeatures.put("GDPR_COMPLIANCE", false);
+        trialFeatures.put("HIPAA_COMPLIANCE", false);
+        trialFeatures.put("SOX_COMPLIANCE", false);
+        trialFeatures.put("DATA_ANONYMIZATION", false);
+        trialFeatures.put("DIFFERENTIAL_PRIVACY", false);
+
+        // Data Exchange & Collaboration Features - Very Limited
+        trialFeatures.put("INTEGRATION_UNLIMITED", false); // 1 integration limit
+        trialFeatures.put("WORKSPACE_UNLIMITED", false); // 1 workspace limit
+        trialFeatures.put("COLLABORATION_ADVANCED", false); // View only sharing
+        trialFeatures.put("CROSS_ORG_SHARING", false);
+        trialFeatures.put("API_UNLIMITED", false); // 50 calls/month
+        trialFeatures.put("WEBHOOKS_UNLIMITED", false); // 1 webhook limit
+        trialFeatures.put("FEDERATED_LEARNING", false);
+
+        // Visualization & Analytics Features - Basic Only
+        trialFeatures.put("VISUALIZATION_ADVANCED", false); // Basic charts
+        trialFeatures.put("DASHBOARD_UNLIMITED", false); // 1 dashboard limit
+        trialFeatures.put("EXPORT_ALL_FORMATS", false); // View only
+        trialFeatures.put("CUSTOM_VISUALIZATIONS", false);
+        trialFeatures.put("REAL_TIME_DASHBOARDS", false);
+        trialFeatures.put("EMBEDDING_WHITELABEL", false);
+
+        // Platform Features - Minimal
+        trialFeatures.put("MONITORING_ADVANCED", false); // Basic monitoring
+        trialFeatures.put("LOGGING_COMPREHENSIVE", false); // 1 day retention
+        trialFeatures.put("CONFIGURATION_DYNAMIC", false);
+        trialFeatures.put("SCHEDULING_UNLIMITED", false); // 2 jobs limit
+        trialFeatures.put("NOTIFICATIONS_UNLIMITED", false); // Email only
+        trialFeatures.put("TENANT_MANAGEMENT_ADVANCED", false);
+        trialFeatures.put("USER_MANAGEMENT_UNLIMITED", false); // 2 users limit
+        trialFeatures.put("SSO_ADVANCED", false); // No SSO
+        trialFeatures.put("RBAC_GRANULAR", false); // Admin/User only
+        trialFeatures.put("CUSTOM_BRANDING", false);
+        trialFeatures.put("PRIORITY_SUPPORT", false); // No support
+        trialFeatures.put("SLA_99_9", false); // Best effort
+        trialFeatures.put("DEDICATED_RESOURCES", false);
+        trialFeatures.put("ON_PREMISE_DEPLOYMENT", false);
+
+        planFeatures.put("TRIAL", Collections.unmodifiableMap(trialFeatures));
+
+        return Collections.unmodifiableMap(planFeatures);
     }
 
     /**
-     * Gets all available features from the feature catalog.
-     * This returns template features that can be enabled for tenants.
+     * Initialize feature flags for a new tenant.
      */
-    public List<FeatureFlag> getAllFeatures() {
-        log.debug("Fetching all available features from catalog");
+    @Transactional
+    public Map<String, Boolean> initializeFeatureFlags(UUID tenantId, String subscriptionPlan) {
+        log.info("Initializing feature flags for tenant: {} with plan: {}", tenantId, subscriptionPlan);
 
-        List<FeatureFlag> allFeatures = new ArrayList<>();
+        Map<String, Boolean> planFeatures = PLAN_FEATURES.getOrDefault(subscriptionPlan,
+                PLAN_FEATURES.get("TRIAL"));
+        Map<String, Boolean> enabledFeatures = new HashMap<>();
 
-        for (FeatureDefinition definition : FEATURE_CATALOG.values()) {
-            FeatureFlag templateFeature = FeatureFlag.builder()
-                    .featureCode(definition.code())
-                    .featureName(definition.name())
-                    .category(definition.category())
-                    .isBeta(definition.isBeta())
-                    .isEnabled(false) // Template features are disabled by default
-                    .requiredPlan(definition.minimumPlans().isEmpty() ? null :
-                            definition.minimumPlans().iterator().next().name())
+        for (Map.Entry<String, Boolean> entry : planFeatures.entrySet()) {
+            FeatureFlag flag = FeatureFlag.builder()
+                    .tenantId(tenantId)
+                    .featureName(entry.getKey())
+                    .enabled(entry.getValue())
+                    .source("PLAN")
+                    .createdAt(Instant.now())
                     .build();
 
-            // Set default usage limits for template
-            setDefaultUsageLimits(templateFeature, definition);
-
-            allFeatures.add(templateFeature);
+            featureFlagRepository.save(flag);
+            enabledFeatures.put(entry.getKey(), entry.getValue());
         }
 
-        log.debug("Retrieved {} features from catalog", allFeatures.size());
-        return allFeatures;
+        log.info("Initialized {} feature flags for tenant: {}", enabledFeatures.size(), tenantId);
+        return enabledFeatures;
     }
 
     /**
-     * Sets default usage limits for template features based on feature definition.
-     */
-    private void setDefaultUsageLimits(FeatureFlag feature, FeatureDefinition definition) {
-        // Set default limits that would apply to the most restrictive plan that supports this feature
-        SubscriptionPlan mostRestrictivePlan = definition.minimumPlans().isEmpty() ?
-                SubscriptionPlan.FREEMIUM :
-                definition.minimumPlans().stream()
-                        .min((p1, p2) -> Integer.compare((int) p1.getSlaUptime(), (int) p2.getSlaUptime()))
-                        .orElse(SubscriptionPlan.FREEMIUM);
-
-        setUsageLimits(feature, mostRestrictivePlan);
-    }
-
-    /**
-     * Enables a feature for a tenant.
+     * Update feature flags when subscription plan changes.
      */
     @Transactional
-    @CacheEvict(value = "tenant-features", key = "#tenant.id")
-    public FeatureFlag enableFeature(Tenant tenant, String featureCode) {
-        log.info("Enabling feature {} for tenant: {}", featureCode, tenant.getName());
-
-        FeatureFlag feature = featureFlagRepository.findByTenantAndFeatureCode(tenant, featureCode)
-                .orElseGet(() -> createFeatureFlag(tenant, FEATURE_CATALOG.get(featureCode),
-                        tenant.getSubscription().getPlan()));
-
-        // Check if tenant is eligible for this feature
-        if (!isEligibleForFeature(tenant, featureCode)) {
-            throw new FeatureNotAvailableException(
-                    String.format("Feature %s is not available for tenant's plan", featureCode)
-            );
-        }
-
-        feature.enable();
-        feature = featureFlagRepository.save(feature);
-
-        log.info("Feature {} enabled for tenant: {}", featureCode, tenant.getName());
-        return feature;
-    }
-
-    /**
-     * Checks if a feature is enabled for a tenant.
-     */
-    @Cacheable(value = "tenant-features", key = "#tenant.id + ':' + #featureCode")
-    public boolean isFeatureEnabled(Tenant tenant, String featureCode) {
-        return featureFlagRepository.findByTenantAndFeatureCode(tenant, featureCode)
-                .map(FeatureFlag::isAccessible)
-                .orElse(false);
-    }
-
-    /**
-     * Gets all features for a tenant.
-     */
-    @Cacheable(value = "tenant-features", key = "#tenant.id")
-    public List<FeatureFlag> getTenantFeatures(Tenant tenant) {
-        return featureFlagRepository.findByTenant(tenant);
-    }
-
-    /**
-     * Gets enabled features for a tenant.
-     */
-    public List<FeatureFlag> getEnabledFeatures(Tenant tenant) {
-        return featureFlagRepository.findByTenantAndIsEnabled(tenant, true);
-    }
-
-    /**
-     * Grants trial access to a premium feature.
-     */
-    @Transactional
-    @CacheEvict(value = "tenant-features", key = "#tenant.id")
-    public FeatureFlag grantTrialAccess(Tenant tenant, String featureCode, int trialDays) {
-        log.info("Granting {} day trial for feature {} to tenant: {}",
-                trialDays, featureCode, tenant.getName());
-
-        FeatureFlag feature = featureFlagRepository.findByTenantAndFeatureCode(tenant, featureCode)
-                .orElseGet(() -> createFeatureFlag(tenant, FEATURE_CATALOG.get(featureCode),
-                        tenant.getSubscription().getPlan()));
-
-        feature.setTrialEnabled(true);
-        feature.setTrialDays(trialDays);
-        feature.setEnabledFrom(Instant.now());
-        feature.setEnabledUntil(Instant.now().plusSeconds(trialDays * 24L * 60 * 60));
-        feature.enable();
-
-        feature = featureFlagRepository.save(feature);
-
-        log.info("Trial access granted for feature: {}", featureCode);
-        return feature;
-    }
-
-    /**
-     * Updates feature usage.
-     */
-    @Transactional
-    @CacheEvict(value = "tenant-features", key = "#tenant.id + ':' + #featureCode")
-    public void recordFeatureUsage(Tenant tenant, String featureCode) {
-        featureFlagRepository.findByTenantAndFeatureCode(tenant, featureCode)
-                .ifPresent(feature -> {
-                    feature.incrementUsage();
-                    featureFlagRepository.save(feature);
-                });
-    }
-
-
-    /**
-     * Approves a feature that requires approval.
-     */
-    @Transactional
-    @CacheEvict(value = "tenant-features", key = "#tenant.id")
-    public FeatureFlag approveFeature(Tenant tenant, String featureCode, String approvedBy, String notes) {
-        log.info("Approving feature {} for tenant: {}", featureCode, tenant.getName());
-
-        FeatureFlag feature = featureFlagRepository.findByTenantAndFeatureCode(tenant, featureCode)
-                .orElseThrow(() -> new FeatureNotFoundException("Feature not found: " + featureCode));
-
-        if (!feature.getRequiresApproval()) {
-            throw new IllegalStateException("Feature does not require approval");
-        }
-
-        feature.setApprovedBy(approvedBy);
-        feature.setApprovedAt(Instant.now());
-        feature.setApprovalNotes(notes);
-        feature.enable();
-
-        feature = featureFlagRepository.save(feature);
-
-        log.info("Feature {} approved for tenant: {}", featureCode, tenant.getName());
-        return feature;
-    }
-
-
-    /**
-     * Disables a feature for a tenant.
-     */
-    @Transactional
-    @CacheEvict(value = "tenant-features", key = "#tenant.id")
-    public FeatureFlag disableFeature(Tenant tenant, String featureCode) {
-        log.info("Disabling feature {} for tenant: {}", featureCode, tenant.getName());
-
-        FeatureFlag feature = featureFlagRepository.findByTenantAndFeatureCode(tenant, featureCode)
-                .orElseThrow(() -> new FeatureNotFoundException("Feature not found: " + featureCode));
-
-        feature.disable();
-        feature = featureFlagRepository.save(feature);
-
-        log.info("Feature {} disabled for tenant: {}", featureCode, tenant.getName());
-        return feature;
-    }
-
-    /**
-     * Sets A/B test group for a feature.
-     */
-    @Transactional
-    @CacheEvict(value = "tenant-features", key = "#tenant.id")
-    public FeatureFlag setABTestGroup(Tenant tenant, String featureCode, String group, int rolloutPercentage) {
-        log.info("Setting A/B test group {} for feature {} ({}% rollout)",
-                group, featureCode, rolloutPercentage);
-
-        FeatureFlag feature = featureFlagRepository.findByTenantAndFeatureCode(tenant, featureCode)
-                .orElseThrow(() -> new FeatureNotFoundException("Feature not found: " + featureCode));
-
-        feature.setRolloutGroup(group);
-        feature.setRolloutPercentage(rolloutPercentage);
-
-        // Enable based on rollout percentage
-        if (shouldEnableBasedOnRollout(tenant, rolloutPercentage)) {
-            feature.enable();
-        }
-
-        feature = featureFlagRepository.save(feature);
-
-        log.info("A/B test group set for feature: {}", featureCode);
-        return feature;
-    }
-
-    /**
-     * Scheduled task to reset feature usage counters.
-     */
-    @Scheduled(cron = "0 0 0 * * *") // Daily at midnight
-    @Transactional
-    public void resetDailyUsageCounters() {
-        log.info("Resetting daily feature usage counters");
-
-        List<FeatureFlag> dailyFeatures = featureFlagRepository.findByResetFrequency("DAILY");
-        for (FeatureFlag feature : dailyFeatures) {
-            feature.resetUsage();
-            featureFlagRepository.save(feature);
-        }
-
-        log.info("Reset {} daily feature counters", dailyFeatures.size());
-    }
-
-    /**
-     * Scheduled task to check expired feature trials.
-     */
-    @Scheduled(cron = "0 0 1 * * *") // Daily at 1 AM
-    @Transactional
-    public void checkExpiredTrials() {
-        log.info("Checking for expired feature trials");
-
-        Instant now = Instant.now();
-        List<FeatureFlag> expiredTrials = featureFlagRepository.findExpiredTrials(now);
-
-        for (FeatureFlag feature : expiredTrials) {
-            feature.disable();
-            feature.setTrialEnabled(false);
-            featureFlagRepository.save(feature);
-            log.info("Disabled expired trial feature {} for tenant {}",
-                    feature.getFeatureCode(), feature.getTenant().getName());
-        }
-
-        log.info("Processed {} expired trials", expiredTrials.size());
-    }
-
-    /**
-     * Enables a feature for a tenant (wrapper method).
-     */
-    @Transactional
-    public FeatureFlag enableFeatureForTenant(Tenant tenant, String featureCode) {
-        return enableFeature(tenant, featureCode);
-    }
-
-    /**
-     * Disables a feature for a tenant (wrapper method).
-     */
-    @Transactional
-    public FeatureFlag disableFeatureForTenant(Tenant tenant, String featureCode) {
-        return disableFeature(tenant, featureCode);
-    }
-
-    /**
-     * Checks if a feature is enabled for a tenant (wrapper method).
-     */
-    public boolean isFeatureEnabledForTenant(Tenant tenant, String featureCode) {
-        return isFeatureEnabled(tenant, featureCode);
-    }
-
-    // Helper methods
-
-    private static Map<String, FeatureDefinition> initializeFeatureCatalog() {
-        Map<String, FeatureDefinition> catalog = new HashMap<>();
-
-        // Analytics features
-        catalog.put("BASIC_ANALYTICS", new FeatureDefinition(
-                "BASIC_ANALYTICS", "Basic Analytics", "ANALYTICS",
-                Set.of(SubscriptionPlan.FREEMIUM), Set.of(), false
-        ));
-
-        catalog.put("ADVANCED_ANALYTICS", new FeatureDefinition(
-                "ADVANCED_ANALYTICS", "Advanced Analytics", "ANALYTICS",
-                Set.of(SubscriptionPlan.PROFESSIONAL, SubscriptionPlan.ENTERPRISE, SubscriptionPlan.GOVERNMENT),
-                Set.of(OrganizationType.CORPORATION, OrganizationType.GOVERNMENT_AGENCY), true
-        ));
-
-        catalog.put("PREDICTIVE_ANALYTICS", new FeatureDefinition(
-                "PREDICTIVE_ANALYTICS", "Predictive Analytics", "ANALYTICS",
-                Set.of(SubscriptionPlan.ENTERPRISE, SubscriptionPlan.GOVERNMENT),
-                Set.of(OrganizationType.FINANCIAL_INSTITUTION, OrganizationType.GOVERNMENT_AGENCY), true
-        ));
-
-        catalog.put("DATA_ENCRYPTION", new FeatureDefinition(
-                "DATA_ENCRYPTION", "End-to-End Data Encryption", "SECURITY",
-                Set.of(SubscriptionPlan.PROFESSIONAL),
-                Set.of(OrganizationType.HEALTHCARE, OrganizationType.FINANCIAL_INSTITUTION), true
-        ));
-
-        // Integration features
-        catalog.put("API_ACCESS", new FeatureDefinition(
-                "API_ACCESS", "API Access", "INTEGRATION",
-                Set.of(SubscriptionPlan.BASIC), Set.of(), false
-        ));
-
-        catalog.put("WEBHOOKS", new FeatureDefinition(
-                "WEBHOOKS", "Webhooks", "INTEGRATION",
-                Set.of(SubscriptionPlan.PROFESSIONAL), Set.of(), false
-        ));
-
-        catalog.put("CUSTOM_INTEGRATIONS", new FeatureDefinition(
-                "CUSTOM_INTEGRATIONS", "Custom Integrations", "INTEGRATION",
-                Set.of(SubscriptionPlan.ENTERPRISE, SubscriptionPlan.GOVERNMENT),
-                Set.of(OrganizationType.CORPORATION, OrganizationType.GOVERNMENT_AGENCY), true
-        ));
-
-        // UI features
-        catalog.put("CUSTOM_DASHBOARDS", new FeatureDefinition(
-                "CUSTOM_DASHBOARDS", "Custom Dashboards", "UI",
-                Set.of(SubscriptionPlan.PROFESSIONAL), Set.of(), false
-        ));
-
-        catalog.put("WHITE_LABEL", new FeatureDefinition(
-                "WHITE_LABEL", "White Label Branding", "UI",
-                Set.of(SubscriptionPlan.ENTERPRISE, SubscriptionPlan.GOVERNMENT),
-                Set.of(OrganizationType.CORPORATION, OrganizationType.GOVERNMENT_AGENCY), false
-        ));
-
-        // Data features
-        catalog.put("DATA_EXPORT", new FeatureDefinition(
-                "DATA_EXPORT", "Data Export", "DATA",
-                Set.of(SubscriptionPlan.BASIC), Set.of(), false
-        ));
-
-        catalog.put("DATA_SHARING", new FeatureDefinition(
-                "DATA_SHARING", "Cross-Tenant Data Sharing", "DATA",
-                Set.of(SubscriptionPlan.ENTERPRISE, SubscriptionPlan.GOVERNMENT, SubscriptionPlan.ACADEMIC),
-                Set.of(OrganizationType.GOVERNMENT_AGENCY, OrganizationType.ACADEMIC_INSTITUTION), true
-        ));
-
-        catalog.put("AUTOMATED_BACKUPS", new FeatureDefinition(
-                "AUTOMATED_BACKUPS", "Automated Backups", "DATA",
-                Set.of(SubscriptionPlan.PROFESSIONAL), Set.of(), false
-        ));
-
-        catalog.put("COMPLIANCE_REPORTS", new FeatureDefinition(
-                "COMPLIANCE_REPORTS", "Compliance Reports", "DATA",
-                Set.of(SubscriptionPlan.ENTERPRISE, SubscriptionPlan.GOVERNMENT),
-                Set.of(OrganizationType.GOVERNMENT_AGENCY, OrganizationType.FINANCIAL_INSTITUTION, OrganizationType.HEALTHCARE), false
-        ));
-
-        return catalog;
-    }
-
-    private boolean shouldEnableFeature(FeatureDefinition definition, OrganizationType orgType, SubscriptionPlan plan) {
-        // Check if plan supports the feature
-        if (!definition.minimumPlans.isEmpty()) {
-            boolean planSupported = definition.minimumPlans.stream()
-                    .anyMatch(minPlan -> plan == minPlan || plan.getSlaUptime() >= minPlan.getSlaUptime());
-            if (!planSupported) return false;
-        }
-
-        // Check if organization type is suitable
-        if (!definition.suitableOrgTypes.isEmpty() && !definition.suitableOrgTypes.contains(orgType)) {
-            return false;
-        }
-
-        // Enable by default if beta and org type is suitable for beta
-        if (definition.isBeta) {
-            return orgType == OrganizationType.CORPORATION ||
-                    orgType == OrganizationType.STARTUP ||
-                    orgType == OrganizationType.INDIVIDUAL;
-        }
-
-        return true;
-    }
-
-    private FeatureFlag createFeatureFlag(Tenant tenant, FeatureDefinition definition, SubscriptionPlan plan) {
-        if (definition == null) {
-            throw new IllegalArgumentException("Feature definition not found");
-        }
-
-        FeatureFlag feature = FeatureFlag.builder()
-                .tenant(tenant)
-                .featureCode(definition.code)
-                .featureName(definition.name)
-                .category(definition.category)
-                .isBeta(definition.isBeta)
-                .isEnabled(shouldEnableByDefault(definition, plan))
-                .requiredPlan(definition.minimumPlans.isEmpty() ? null :
-                        definition.minimumPlans.iterator().next().name())
-                .build();
-
-        // Set usage limits based on plan
-        setUsageLimits(feature, plan);
-
-        return feature;
-    }
-
-    private boolean shouldEnableByDefault(FeatureDefinition definition, SubscriptionPlan plan) {
-        // Enable basic features by default
-        if (definition.code.startsWith("BASIC_")) {
-            return true;
-        }
-
-        // Enable if plan includes the feature
-        return plan.hasFeature(definition.code);
-    }
-
-    private void setUsageLimits(FeatureFlag feature, SubscriptionPlan plan) {
-        // Set usage limits based on feature and plan
-        switch (feature.getFeatureCode()) {
-            case "API_ACCESS" -> {
-                feature.setUsageLimit(plan.getApiCallsPerDay());
-                feature.setResetFrequency("DAILY");
-            }
-            case "DATA_EXPORT" -> {
-                feature.setUsageLimit(getExportLimit(plan));
-                feature.setResetFrequency("MONTHLY");
-            }
-            case "CUSTOM_DASHBOARDS" -> {
-                feature.setUsageLimit(getDashboardLimit(plan));
-            }
-            default -> {
-                // No limits
+    @CacheEvict(value = "feature-flags", key = "#tenantId")
+    public Map<String, Boolean> updateFeatureFlagsForPlan(UUID tenantId, String newPlan) {
+        log.info("Updating feature flags for tenant: {} to plan: {}", tenantId, newPlan);
+
+        Map<String, Boolean> newPlanFeatures = PLAN_FEATURES.getOrDefault(newPlan,
+                PLAN_FEATURES.get("TRIAL"));
+        List<FeatureFlag> existingFlags = featureFlagRepository.findByTenantId(tenantId);
+        Map<String, Boolean> updatedFeatures = new HashMap<>();
+
+        // Update existing flags
+        for (FeatureFlag flag : existingFlags) {
+            if (newPlanFeatures.containsKey(flag.getFeatureName())) {
+                boolean newValue = newPlanFeatures.get(flag.getFeatureName());
+
+                // Only update if the flag is managed by plan (not custom override)
+                if ("PLAN".equals(flag.getSource())) {
+                    flag.setEnabled(newValue);
+                    flag.setUpdatedAt(Instant.now());
+                    featureFlagRepository.save(flag);
+                }
+
+                updatedFeatures.put(flag.getFeatureName(), flag.getEnabled());
             }
         }
-    }
 
-    private boolean isEligibleForFeature(Tenant tenant, String featureCode) {
-        FeatureDefinition definition = FEATURE_CATALOG.get(featureCode);
-        if (definition == null) return false;
+        // Add any new features from the plan
+        Set<String> existingFeatureNames = new HashSet<>();
+        existingFlags.forEach(f -> existingFeatureNames.add(f.getFeatureName()));
 
-        SubscriptionPlan currentPlan = tenant.getSubscription().getPlan();
+        for (Map.Entry<String, Boolean> entry : newPlanFeatures.entrySet()) {
+            if (!existingFeatureNames.contains(entry.getKey())) {
+                FeatureFlag flag = FeatureFlag.builder()
+                        .tenantId(tenantId)
+                        .featureName(entry.getKey())
+                        .enabled(entry.getValue())
+                        .source("PLAN")
+                        .createdAt(Instant.now())
+                        .build();
 
-        return definition.minimumPlans.isEmpty() ||
-                definition.minimumPlans.contains(currentPlan);
-    }
-
-    private boolean shouldEnableBasedOnRollout(Tenant tenant, int rolloutPercentage) {
-        // Simple hash-based rollout
-        int hash = tenant.getId().hashCode();
-        return Math.abs(hash % 100) < rolloutPercentage;
-    }
-
-    private int getExportLimit(SubscriptionPlan plan) {
-        return switch (plan) {
-            case FREEMIUM -> 5;
-            case BASIC -> 20;
-            case PROFESSIONAL -> 100;
-            case ENTERPRISE, GOVERNMENT, ACADEMIC -> -1; // Unlimited
-            default -> 10;
-        };
-    }
-
-    private int getDashboardLimit(SubscriptionPlan plan) {
-        return switch (plan) {
-            case FREEMIUM -> 1;
-            case BASIC -> 5;
-            case PROFESSIONAL -> 20;
-            case ENTERPRISE, GOVERNMENT, ACADEMIC -> -1; // Unlimited
-            default -> 3;
-        };
-    }
-
-    // Inner classes
-
-    private record FeatureDefinition(
-            String code,
-            String name,
-            String category,
-            Set<SubscriptionPlan> minimumPlans,
-            Set<OrganizationType> suitableOrgTypes,
-            boolean isBeta
-    ) {}
-
-    // Exceptions
-
-    public static class FeatureNotFoundException extends RuntimeException {
-        public FeatureNotFoundException(String message) {
-            super(message);
+                featureFlagRepository.save(flag);
+                updatedFeatures.put(entry.getKey(), entry.getValue());
+            }
         }
+
+        log.info("Updated {} feature flags for tenant: {}", updatedFeatures.size(), tenantId);
+        return updatedFeatures;
     }
 
-    public static class FeatureNotAvailableException extends RuntimeException {
-        public FeatureNotAvailableException(String message) {
-            super(message);
+    /**
+     * Get all feature flags for a tenant.
+     */
+    @Cacheable(value = "feature-flags", key = "#tenantId")
+    public Map<String, Boolean> getFeatureFlags(UUID tenantId) {
+        List<FeatureFlag> flags = featureFlagRepository.findByTenantId(tenantId);
+        Map<String, Boolean> featureMap = new HashMap<>();
+
+        for (FeatureFlag flag : flags) {
+            featureMap.put(flag.getFeatureName(), flag.getEnabled());
         }
+
+        return featureMap;
     }
 
+    /**
+     * Check if a specific feature is enabled for a tenant.
+     */
+    @Cacheable(value = "feature-flag", key = "#tenantId + ':' + #featureName")
+    public boolean isFeatureEnabled(UUID tenantId, String featureName) {
+        Optional<FeatureFlag> flag = featureFlagRepository.findByTenantIdAndFeatureName(tenantId, featureName);
+        return flag.map(FeatureFlag::getEnabled).orElse(false);
+    }
 
+    /**
+     * Override a feature flag for a specific tenant.
+     */
+    @Transactional
+    @CacheEvict(value = {"feature-flags", "feature-flag"}, key = "#tenantId")
+    public FeatureFlag overrideFeatureFlag(UUID tenantId, String featureName, boolean enabled, String reason) {
+        log.info("Overriding feature {} for tenant: {} to: {}", featureName, tenantId, enabled);
 
+        FeatureFlag flag = featureFlagRepository.findByTenantIdAndFeatureName(tenantId, featureName)
+                .orElse(FeatureFlag.builder()
+                        .tenantId(tenantId)
+                        .featureName(featureName)
+                        .createdAt(Instant.now())
+                        .build());
+
+        flag.setEnabled(enabled);
+        flag.setSource("OVERRIDE");
+        flag.setOverrideReason(reason);
+        flag.setUpdatedAt(Instant.now());
+
+        flag = featureFlagRepository.save(flag);
+
+        log.info("Feature {} overridden for tenant: {}", featureName, tenantId);
+        return flag;
+    }
+
+    /**
+     * Reset a feature flag to plan default.
+     */
+    @Transactional
+    @CacheEvict(value = {"feature-flags", "feature-flag"}, key = "#tenantId")
+    public FeatureFlag resetFeatureFlag(UUID tenantId, String featureName) {
+        log.info("Resetting feature {} for tenant: {}", featureName, tenantId);
+
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new IllegalArgumentException("Tenant not found: " + tenantId));
+
+        String plan = tenant.getSubscriptionPlan();
+        Map<String, Boolean> planFeatures = PLAN_FEATURES.getOrDefault(plan, PLAN_FEATURES.get("TRIAL"));
+
+        FeatureFlag flag = featureFlagRepository.findByTenantIdAndFeatureName(tenantId, featureName)
+                .orElseThrow(() -> new IllegalArgumentException("Feature flag not found: " + featureName));
+
+        flag.setEnabled(planFeatures.getOrDefault(featureName, false));
+        flag.setSource("PLAN");
+        flag.setOverrideReason(null);
+        flag.setUpdatedAt(Instant.now());
+
+        flag = featureFlagRepository.save(flag);
+
+        log.info("Feature {} reset to plan default for tenant: {}", featureName, tenantId);
+        return flag;
+    }
+
+    /**
+     * Get feature usage statistics for a tenant.
+     */
+    public Map<String, Object> getFeatureUsageStats(UUID tenantId) {
+        Map<String, Boolean> flags = getFeatureFlags(tenantId);
+
+        long enabledCount = flags.values().stream().filter(Boolean::booleanValue).count();
+        long totalCount = flags.size();
+
+        Map<String, Object> stats = new HashMap<>();
+        stats.put("totalFeatures", totalCount);
+        stats.put("enabledFeatures", enabledCount);
+        stats.put("disabledFeatures", totalCount - enabledCount);
+        stats.put("enabledPercentage", totalCount > 0 ? (enabledCount * 100.0 / totalCount) : 0);
+        stats.put("features", flags);
+
+        return stats;
+    }
 }

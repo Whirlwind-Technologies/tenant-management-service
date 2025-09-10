@@ -4,8 +4,10 @@ import com.nnipa.tenant.client.NotificationServiceClient;
 import com.nnipa.tenant.entity.Tenant;
 import com.nnipa.tenant.entity.TenantSettings;
 import com.nnipa.tenant.enums.ComplianceFramework;
+import com.nnipa.tenant.enums.IsolationStrategy;
 import com.nnipa.tenant.enums.OrganizationType;
 import com.nnipa.tenant.enums.TenantStatus;
+import com.nnipa.tenant.event.publisher.TenantEventPublisher;
 import com.nnipa.tenant.exception.*;
 import com.nnipa.tenant.repository.TenantRepository;
 import lombok.RequiredArgsConstructor;
@@ -19,6 +21,11 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.util.*;
 
+/**
+ * Service for managing tenant lifecycle.
+ * Focuses on: configuration, metadata, billing, and feature flags.
+ * Storage operations are handled by data-storage-service via events.
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -29,6 +36,9 @@ public class TenantService {
     private final TenantSettingsService settingsService;
     private final NotificationServiceClient notificationClient;
     private final TenantProvisioningService provisioningService;
+    private final TenantEventPublisher eventPublisher; // NEW: Kafka event publisher
+    private final BillingService billingService; // NEW: Billing service
+    private final FeatureFlagService featureFlagService; // NEW: Feature flag service
 
     @Transactional
     public Tenant createTenant(Tenant tenant) {
@@ -63,14 +73,37 @@ public class TenantService {
                 tenant.setTenantCode(generateTenantCode(tenant));
             }
 
-            // Step 6: Provision the tenant (includes database/schema creation)
+            // Step 6: Initialize subscription plan and billing
+            if (tenant.getSubscriptionPlan() == null) {
+                tenant.setSubscriptionPlan(determineDefaultPlan(tenant.getOrganizationType()));
+            }
+
+            // Step 7: Save tenant to database first
+            tenant = tenantRepository.save(tenant);
+
+            // Step 8: Initialize billing
+            billingService.initializeBilling(tenant.getId(), tenant.getSubscriptionPlan());
+
+            // Step 9: Initialize feature flags
+            Map<String, Boolean> featureFlags = featureFlagService.initializeFeatureFlags(
+                    tenant.getId(), tenant.getSubscriptionPlan());
+            tenant.setFeatureFlags(featureFlags);
+
+            // Step 10: Provision the tenant (basic setup only - no storage)
+            // Storage provisioning will be handled by data-storage-service via event
             tenant = provisioningService.provisionTenant(tenant);
 
-            // Step 7: Create default settings
+            // Step 11: Create default settings
             TenantSettings settings = settingsService.createDefaultSettings(tenant);
             tenant.setSettings(settings);
 
-            // Step 8: Send notification asynchronously
+            // Step 12: Update with all configurations
+            tenant = tenantRepository.save(tenant);
+
+            // Step 13: Publish tenant created event (for other services)
+            eventPublisher.publishTenantCreatedEvent(tenant);
+
+            // Step 14: Send notification asynchronously
             sendTenantCreatedNotification(tenant);
 
             log.info("Tenant created successfully: {} (ID: {}, Status: {})",
@@ -79,18 +112,15 @@ public class TenantService {
             return tenant;
 
         } catch (DuplicateTenantException | TenantValidationException | ValidationException e) {
-            // These are expected validation exceptions - just rethrow them
             log.error("Tenant validation failed: {}", e.getMessage());
             throw e;
         } catch (Exception e) {
             log.error("Failed to create tenant: {}", tenant.getName(), e);
 
-            // Attempt rollback if tenant was partially created
             if (tenant.getId() != null) {
                 rollbackTenantCreation(tenant);
             }
 
-            // Wrap in TenantCreationException if not already a TenantException
             if (e instanceof TenantException) {
                 throw (TenantException) e;
             }
@@ -106,6 +136,9 @@ public class TenantService {
         Tenant tenant = tenantRepository.findById(id)
                 .orElseThrow(() -> new TenantNotFoundException("Tenant not found with ID: " + id));
 
+        // Track if subscription changed
+        String oldSubscriptionPlan = tenant.getSubscriptionPlan();
+
         // Update allowed fields
         if (updates.getName() != null) {
             tenant.setName(updates.getName());
@@ -117,7 +150,6 @@ public class TenantService {
             tenant.setDescription(updates.getDescription());
         }
         if (updates.getOrganizationEmail() != null) {
-            // Check if email is being changed and validate uniqueness
             if (!tenant.getOrganizationEmail().equals(updates.getOrganizationEmail())) {
                 if (tenantRepository.existsByOrganizationEmail(updates.getOrganizationEmail())) {
                     throw new DuplicateTenantException("Organization email already registered: " +
@@ -136,8 +168,29 @@ public class TenantService {
             tenant.setLogoUrl(updates.getLogoUrl());
         }
 
+        // Handle subscription plan changes
+        if (updates.getSubscriptionPlan() != null &&
+                !updates.getSubscriptionPlan().equals(oldSubscriptionPlan)) {
+            tenant.setSubscriptionPlan(updates.getSubscriptionPlan());
+
+            // Update billing
+            billingService.updateSubscription(tenant.getId(), updates.getSubscriptionPlan());
+
+            // Update feature flags
+            Map<String, Boolean> newFlags = featureFlagService.updateFeatureFlagsForPlan(
+                    tenant.getId(), updates.getSubscriptionPlan());
+            tenant.setFeatureFlags(newFlags);
+
+            // Publish subscription changed event
+            eventPublisher.publishSubscriptionChangedEvent(tenant, oldSubscriptionPlan,
+                    updates.getSubscriptionPlan());
+        }
+
         tenant.setUpdatedAt(Instant.now());
         tenant = tenantRepository.save(tenant);
+
+        // Publish tenant updated event
+        eventPublisher.publishTenantUpdatedEvent(tenant);
 
         log.info("Tenant updated successfully: {}", id);
         return tenant;
@@ -181,6 +234,9 @@ public class TenantService {
         tenant.setSuspensionReason(reason);
         tenant = tenantRepository.save(tenant);
 
+        // Publish tenant suspended event
+        eventPublisher.publishTenantSuspendedEvent(tenant, reason);
+
         // Send notification
         notificationClient.sendNotification(
                 tenant.getId(),
@@ -192,6 +248,31 @@ public class TenantService {
         );
 
         log.warn("Tenant suspended: {}", id);
+        return tenant;
+    }
+
+    @Transactional
+    public Tenant reactivateTenant(UUID id, String reactivatedBy) {
+        log.info("Reactivating tenant: {}", id);
+
+        Tenant tenant = tenantRepository.findById(id)
+                .orElseThrow(() -> new TenantNotFoundException("Tenant not found: " + id));
+
+        if (tenant.getStatus() != TenantStatus.SUSPENDED &&
+                tenant.getStatus() != TenantStatus.DEACTIVATED) {
+            throw new IllegalStateException("Tenant is not suspended or deactivated");
+        }
+
+        tenant.setStatus(TenantStatus.ACTIVE);
+        tenant.setSuspendedAt(null);
+        tenant.setSuspensionReason(null);
+        tenant.setUpdatedAt(Instant.now());
+        tenant = tenantRepository.save(tenant);
+
+        // Publish reactivation event
+        eventPublisher.publishTenantReactivatedEvent(tenant, reactivatedBy);
+
+        log.info("Reactivated tenant: {}", id);
         return tenant;
     }
 
@@ -247,7 +328,6 @@ public class TenantService {
         Tenant tenant = tenantRepository.findById(id)
                 .orElseThrow(() -> new TenantNotFoundException("Tenant not found with ID: " + id));
 
-        // Check if tenant can be deleted
         if (tenant.getStatus() == TenantStatus.ACTIVE) {
             throw new InvalidTenantStatusException(
                     tenant.getStatus().toString(),
@@ -258,12 +338,91 @@ public class TenantService {
         // Soft delete
         tenant.setIsDeleted(true);
         tenant.setDeletedAt(Instant.now());
+        tenant.setStatus(TenantStatus.DELETED);
         tenantRepository.save(tenant);
 
-        // Deprovision resources
+        // Cancel billing
+        billingService.cancelSubscription(tenant.getId());
+
+        // Deprovision basic resources (not storage)
         provisioningService.deprovisionTenant(tenant);
 
+        // Publish tenant deactivated event
+        // Data-storage-service will handle storage cleanup
+        eventPublisher.publishTenantDeactivatedEvent(tenant);
+
         log.info("Tenant deleted successfully: {}", id);
+    }
+
+
+    /**
+     * Migrate tenant to different isolation strategy.
+     */
+    @Transactional
+    public Tenant migrateTenant(UUID tenantId, String toStrategy, String migratedBy) {
+        log.info("Migrating tenant: {} to strategy: {}", tenantId, toStrategy);
+
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new TenantNotFoundException("Tenant not found: " + tenantId));
+
+        String fromStrategy = tenant.getIsolationStrategy().toString();
+
+        if (fromStrategy.equals(toStrategy)) {
+            log.info("Isolation strategy unchanged for tenant: {}", tenantId);
+            return tenant;
+        }
+
+        // Update strategy
+        tenant.setIsolationStrategy(parseIsolationStrategy(toStrategy));
+        tenant.setStatus(TenantStatus.MIGRATING);
+        tenant.setUpdatedAt(Instant.now());
+        tenant = tenantRepository.save(tenant);
+
+        // Publish migration event
+        // Data-storage-service and other services will handle the actual migration
+        eventPublisher.publishTenantMigratedEvent(tenant, fromStrategy, toStrategy);
+
+        log.info("Initiated migration for tenant: {} from {} to {}",
+                tenantId, fromStrategy, toStrategy);
+
+        return tenant;
+    }
+
+    /**
+     * Update tenant user count (called by user-management-service via events).
+     */
+    @Transactional
+    public void incrementUserCount(UUID tenantId) {
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new TenantNotFoundException("Tenant not found: " + tenantId));
+
+        Integer currentUsers = tenant.getCurrentUsers() != null ? tenant.getCurrentUsers() : 0;
+        tenant.setCurrentUsers(currentUsers + 1);
+
+        // Check if user limit exceeded
+        if (tenant.getMaxUsers() != null && tenant.getCurrentUsers() > tenant.getMaxUsers()) {
+            log.warn("Tenant {} has exceeded user limit: {}/{}",
+                    tenantId, tenant.getCurrentUsers(), tenant.getMaxUsers());
+
+            // Could send notification or take action
+            eventPublisher.publishUserLimitExceededEvent(tenant);
+        }
+
+        tenantRepository.save(tenant);
+        log.debug("Incremented user count for tenant {} to {}", tenantId, tenant.getCurrentUsers());
+    }
+
+    @Transactional
+    public void decrementUserCount(UUID tenantId) {
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new TenantNotFoundException("Tenant not found: " + tenantId));
+
+        Integer currentUsers = tenant.getCurrentUsers() != null ? tenant.getCurrentUsers() : 0;
+        if (currentUsers > 0) {
+            tenant.setCurrentUsers(currentUsers - 1);
+            tenantRepository.save(tenant);
+            log.debug("Decremented user count for tenant {} to {}", tenantId, tenant.getCurrentUsers());
+        }
     }
 
 
@@ -503,5 +662,22 @@ public class TenantService {
 
         log.info("Provisioning retry completed for tenant: {}", tenant.getName());
         return tenant;
+    }
+
+    private String determineDefaultPlan(OrganizationType orgType) {
+        return switch (orgType) {
+            case GOVERNMENT_AGENCY, CORPORATION -> "ENTERPRISE";
+            case FINANCIAL_INSTITUTION, HEALTHCARE -> "PROFESSIONAL";
+            case ACADEMIC_INSTITUTION, NON_PROFIT -> "STANDARD";
+            case STARTUP, RESEARCH_ORGANIZATION, INDIVIDUAL -> "TRIAL";
+        };
+    }
+
+    private IsolationStrategy parseIsolationStrategy(String strategy) {
+        try {
+            return IsolationStrategy.valueOf(strategy);
+        } catch (IllegalArgumentException e) {
+            throw new ValidationException("Invalid isolation strategy: " + strategy);
+        }
     }
 }

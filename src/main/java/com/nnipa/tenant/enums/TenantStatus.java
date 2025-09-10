@@ -106,6 +106,12 @@ public enum TenantStatus {
             "Tenant resources have been deprovisioned",
             false,
             false
+    ),
+    MIGRATING(
+            "Migrating",
+            "Tenant migrated",
+            false,
+            false
     );
 
     private final String displayName;
@@ -116,35 +122,20 @@ public enum TenantStatus {
     /**
      * Checks if transition to another status is valid.
      */
-    public boolean canTransitionTo(TenantStatus newStatus) {
+    public boolean canTransitionTo(TenantStatus targetStatus) {
+        // Define valid transitions
         return switch (this) {
-            case PENDING_VERIFICATION -> newStatus == PROVISIONING ||
-                    newStatus == ACTIVE ||
-                    newStatus == PROVISIONING_FAILED;
-            case PROVISIONING -> newStatus == DATABASE_CREATED ||
-                    newStatus == SCHEMA_CREATED ||
-                    newStatus == READY ||
-                    newStatus == PROVISIONING_FAILED;
-            case DATABASE_CREATED, SCHEMA_CREATED, READY -> newStatus == ACTIVE ||
-                    newStatus == TRIAL;
-            case PROVISIONING_FAILED, CREATION_FAILED -> newStatus == PENDING_VERIFICATION ||
-                    newStatus == PROVISIONING ||
-                    newStatus == MARKED_FOR_DELETION;
-            case ACTIVE -> newStatus == SUSPENDED ||
-                    newStatus == DEACTIVATED ||
-                    newStatus == MARKED_FOR_DELETION;
-            case TRIAL -> newStatus == ACTIVE ||
-                    newStatus == SUSPENDED ||
-                    newStatus == DEACTIVATED;
-            case SUSPENDED -> newStatus == ACTIVE ||
-                    newStatus == DEACTIVATED ||
-                    newStatus == MARKED_FOR_DELETION;
-            case DEACTIVATED -> newStatus == ACTIVE ||
-                    newStatus == MARKED_FOR_DELETION;
-            case MARKED_FOR_DELETION -> newStatus == DELETED ||
-                    newStatus == DEPROVISIONED;
-            case DEPROVISIONED -> newStatus == DELETED;
-            case DELETED -> false;
+            case PENDING_VERIFICATION -> targetStatus == PROVISIONING || targetStatus == ACTIVE;
+            case PROVISIONING -> targetStatus == DATABASE_CREATED || targetStatus == PROVISIONING_FAILED;
+            case DATABASE_CREATED -> targetStatus == SCHEMA_CREATED || targetStatus == PROVISIONING_FAILED;
+            case SCHEMA_CREATED -> targetStatus == READY || targetStatus == PROVISIONING_FAILED;
+            case READY -> targetStatus == ACTIVE || targetStatus == TRIAL;
+            case ACTIVE -> targetStatus == SUSPENDED || targetStatus == MARKED_FOR_DELETION || targetStatus == MIGRATING;
+            case TRIAL -> targetStatus == ACTIVE || targetStatus == SUSPENDED || targetStatus == MARKED_FOR_DELETION;
+            case SUSPENDED -> targetStatus == ACTIVE || targetStatus == MARKED_FOR_DELETION;
+            case MARKED_FOR_DELETION -> targetStatus == DELETED;
+            case MIGRATING -> targetStatus == ACTIVE || targetStatus == PROVISIONING_FAILED;
+            default -> false;
         };
     }
 }
