@@ -3,59 +3,60 @@ package com.nnipa.tenant;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration;
 import org.springframework.cache.annotation.EnableCaching;
-import org.springframework.context.annotation.Bean;
-import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
+import org.springframework.kafka.annotation.EnableKafka;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
-import org.springframework.transaction.annotation.EnableTransactionManagement;
-import org.springframework.web.client.RestTemplate;
 
 /**
- * Main application class for the Tenant Management Service.
- * Authentication handled by auth-service, authorization by authz-service,
- * rate limiting by api-gateway, notifications by notification-service.
+ * Tenant Management Service Application
+ *
+ * This service manages the multi-tenant architecture of the NNIPA platform, providing:
+ * - Multi-tenant configuration and provisioning
+ * - Tenant metadata and settings management
+ * - Billing and subscription management
+ * - Feature flags per tenant
+ *
+ * Key Features:
+ * - RESTful APIs for tenant CRUD operations
+ * - Event-driven architecture with Kafka for inter-service communication
+ * - Protobuf message serialization for efficient data transfer
+ * - Redis caching for improved performance
+ * - PostgreSQL for persistent data storage
+ * - Comprehensive audit logging
+ * - Flexible subscription and billing models
+ * - Granular feature flag management
+ *
+ * Integration Points:
+ * - Auth Service: Receives user authentication events
+ * - User Management Service: Coordinates user-tenant associations
+ * - Event Streaming Service: Publishes tenant lifecycle events
+ * - Notification Service: Triggers notifications for tenant events
+ * - Data Storage Service: Manages tenant-specific data isolation
  */
 @Slf4j
-@SpringBootApplication
+@SpringBootApplication(exclude = {
+		RedisRepositoriesAutoConfiguration.class
+})
+@EnableKafka
 @EnableCaching
-@EnableJpaAuditing
 @EnableAsync
 @EnableScheduling
-@EnableTransactionManagement
-@ConfigurationPropertiesScan("com.nnipa.tenant.config")
 public class TenantManagementServiceApplication {
 
 	public static void main(String[] args) {
 		SpringApplication.run(TenantManagementServiceApplication.class, args);
-		log.info("===========================================");
-		log.info("NNIPA Tenant Management Service Started");
-		log.info("Supporting Organization Types:");
-		log.info("- Government Agencies");
-		log.info("- Corporations");
-		log.info("- Academic Institutions");
-		log.info("- Healthcare Organizations");
-		log.info("- Financial Institutions");
-		log.info("- Non-Profits");
-		log.info("- Startups");
-		log.info("- Research Organizations");
-		log.info("- Individual Users");
-		log.info("===========================================");
-		log.info("Integration Points:");
-		log.info("- Authentication: auth-service");
-		log.info("- Authorization: authz-service");
-		log.info("- Rate Limiting: api-gateway");
-		log.info("- Notifications: notification-service");
-		log.info("===========================================");
-	}
 
-	/**
-	 * RestTemplate bean for inter-service communication.
-	 * Enhanced with circuit breakers and retry logic via Resilience4j.
-	 */
-	@Bean
-	public RestTemplate restTemplate() {
-		return new RestTemplate();
+		log.info("========================================");
+		log.info("NNIPA Tenant Management Service Started");
+		log.info("========================================");
+		log.info("Service Capabilities:");
+		log.info("- Multi-tenant provisioning and management");
+		log.info("- Subscription and billing management");
+		log.info("- Feature flag configuration");
+		log.info("- Tenant settings and metadata");
+		log.info("- Event-driven integration via Kafka");
+		log.info("========================================");
 	}
 }

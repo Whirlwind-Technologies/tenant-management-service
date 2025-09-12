@@ -1,75 +1,68 @@
 package com.nnipa.tenant.dto.response;
 
-import io.swagger.v3.oas.annotations.media.Schema;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.nnipa.tenant.enums.FeatureCategory;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.Instant;
-import java.util.UUID;
-
+import java.time.LocalDateTime;
+import java.util.Map;
+import java.util.UUID; /**
+ * Response DTO for feature flags
+ */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Schema(description = "Feature flag response")
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public class FeatureFlagResponse {
 
-    @Schema(description = "Feature flag ID")
     private UUID id;
-
-    @Schema(description = "Feature code")
+    private UUID tenantId;
     private String featureCode;
-
-    @Schema(description = "Feature name")
     private String featureName;
-
-    @Schema(description = "Description")
     private String description;
+    private FeatureCategory category;
 
-    @Schema(description = "Category")
-    private String category;
-
-    @Schema(description = "Is enabled")
+    // Status
     private Boolean isEnabled;
-
-    @Schema(description = "Is accessible (considering all constraints)")
-    private Boolean isAccessible;
-
-    @Schema(description = "Is beta feature")
+    private Boolean isAvailable;
     private Boolean isBeta;
-
-    @Schema(description = "Is experimental")
     private Boolean isExperimental;
 
-    @Schema(description = "Required plan")
+    // Requirements
     private String requiredPlan;
+    private String requiredOrganizationType;
 
-    @Schema(description = "Trial enabled")
+    // Time-based
+    private LocalDateTime enabledFrom;
+    private LocalDateTime enabledUntil;
     private Boolean trialEnabled;
+    private Integer trialDays;
 
-    @Schema(description = "Trial days remaining")
-    private Integer trialDaysRemaining;
-
-    @Schema(description = "Usage limit")
+    // Usage
     private Integer usageLimit;
-
-    @Schema(description = "Current usage")
     private Integer currentUsage;
+    private String resetFrequency;
+    private LocalDateTime lastResetAt;
 
-    @Schema(description = "Usage percentage")
-    private Integer usagePercentage;
+    // Configuration
+    private Map<String, Object> config;
+    private Map<String, Object> metadata;
 
-    @Schema(description = "Enabled from")
-    private Instant enabledFrom;
-
-    @Schema(description = "Enabled until")
-    private Instant enabledUntil;
-
-    @Schema(description = "Rollout percentage")
+    // Rollout
     private Integer rolloutPercentage;
-
-    @Schema(description = "Rollout group")
     private String rolloutGroup;
+
+    // Tracking
+    private LocalDateTime firstEnabledAt;
+    private LocalDateTime lastEnabledAt;
+    private Integer totalEnabledDays;
+    private Integer toggleCount;
+
+    // Audit
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
 }

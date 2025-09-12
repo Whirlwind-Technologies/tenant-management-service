@@ -1,81 +1,74 @@
 package com.nnipa.tenant.dto.response;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.nnipa.tenant.enums.BillingCycle;
 import com.nnipa.tenant.enums.SubscriptionPlan;
-import io.swagger.v3.oas.annotations.media.Schema;
+import com.nnipa.tenant.enums.SubscriptionStatus;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
-import java.time.Instant;
-import java.util.Set;
-import java.util.UUID;
-
+import java.time.LocalDateTime;
+import java.util.UUID; /**
+ * Response DTO for subscription information
+ */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Schema(description = "Subscription information response")
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public class SubscriptionResponse {
 
-    @Schema(description = "Subscription ID")
     private UUID id;
-
-    @Schema(description = "Tenant ID")
     private UUID tenantId;
-
-    @Schema(description = "Tenant name")
+    private String tenantCode;
     private String tenantName;
 
-    @Schema(description = "Subscription plan")
     private SubscriptionPlan plan;
+    private SubscriptionStatus subscriptionStatus;
 
-    @Schema(description = "Subscription status")
-    private String subscriptionStatus;
-
-    @Schema(description = "Monthly price")
+    // Pricing
     private BigDecimal monthlyPrice;
-
-    @Schema(description = "Currency")
+    private BigDecimal annualPrice;
     private String currency;
+    private BillingCycle billingCycle;
 
-    @Schema(description = "Billing cycle")
-    private String billingCycle;
-
-    @Schema(description = "Discount percentage")
+    // Discount
     private BigDecimal discountPercentage;
-
-    @Schema(description = "Discount reason")
+    private BigDecimal discountAmount;
     private String discountReason;
+    private LocalDateTime discountValidUntil;
 
-    @Schema(description = "Start date")
-    private Instant startDate;
+    // Lifecycle
+    private LocalDateTime startDate;
+    private LocalDateTime endDate;
+    private LocalDateTime trialStartDate;
+    private LocalDateTime trialEndDate;
+    private LocalDateTime cancelledAt;
+    private String cancellationReason;
 
-    @Schema(description = "End date")
-    private Instant endDate;
-
-    @Schema(description = "Trial end date")
-    private Instant trialEndDate;
-
-    @Schema(description = "Next renewal date")
-    private Instant nextRenewalDate;
-
-    @Schema(description = "Auto-renew enabled")
+    // Renewal
+    private LocalDateTime nextRenewalDate;
     private Boolean autoRenew;
+    private LocalDateTime lastRenewedAt;
 
-    @Schema(description = "Payment method")
+    // Payment
     private String paymentMethod;
+    private LocalDateTime lastPaymentDate;
+    private BigDecimal lastPaymentAmount;
+    private String lastPaymentStatus;
+    private Integer failedPaymentCount;
 
-    @Schema(description = "Custom features")
-    private Set<String> customFeatures;
+    // Billing details summary
+    private BillingDetailsSummaryResponse billingDetails;
 
-    @Schema(description = "Add-ons")
-    private Set<String> addons;
+    // Usage summary
+    private BigDecimal currentMonthUsage;
+    private BigDecimal unbilledAmount;
 
-    @Schema(description = "Is in trial")
-    private Boolean isInTrial;
-
-    @Schema(description = "Days until renewal")
-    private Integer daysUntilRenewal;
+    // Audit
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
 }

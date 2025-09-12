@@ -1,19 +1,13 @@
 package com.nnipa.tenant.controller;
 
-import com.nnipa.tenant.dto.request.CreateTenantRequest;
-import com.nnipa.tenant.dto.request.UpdateTenantRequest;
-import com.nnipa.tenant.dto.response.ApiResponse;
-import com.nnipa.tenant.dto.response.TenantResponse;
-import com.nnipa.tenant.dto.response.TenantStatisticsResponse;
-import com.nnipa.tenant.entity.Tenant;
+import com.nnipa.tenant.dto.request.*;
+import com.nnipa.tenant.dto.response.*;
 import com.nnipa.tenant.enums.OrganizationType;
-import com.nnipa.tenant.mapper.TenantMapper;
-import com.nnipa.tenant.service.OrganizationHierarchyService;
-import com.nnipa.tenant.service.TenantService;
-import com.nnipa.tenant.util.ResponseUtil;
+import com.nnipa.tenant.enums.TenantStatus;
+import com.nnipa.tenant.service.*;
 import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.media.Content;
-import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -23,16 +17,17 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+//import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 /**
- * REST controller for tenant management operations.
- * Authorization handled by authz-service through API Gateway.
+ * REST controller for tenant management
  */
 @Slf4j
 @RestController
@@ -42,189 +37,278 @@ import java.util.stream.Collectors;
 public class TenantController {
 
     private final TenantService tenantService;
-    private final OrganizationHierarchyService hierarchyService;
-    private final TenantMapper tenantMapper;
+    private final SubscriptionService subscriptionService;
+    private final FeatureFlagService featureFlagService;
+    private final TenantSettingsService settingsService;
+    private final BillingService billingService;
 
+    /**
+     * Create a new tenant
+     */
     @PostMapping
-    @Operation(summary = "Create a new tenant")
-    @ApiResponses(value = {
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "201",
-                    description = "Tenant created successfully",
-                    content = @Content(schema = @Schema(implementation = ApiResponse.class))
-            ),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400",
-                    description = "Invalid request"
-            )
+    @Operation(summary = "Create a new tenant", description = "Creates a new tenant with subscription and settings")
+    @ApiResponses({
+            @ApiResponse(responseCode = "201", description = "Tenant created successfully"),
+            @ApiResponse(responseCode = "400", description = "Invalid request data"),
+            @ApiResponse(responseCode = "409", description = "Tenant already exists")
     })
-    public ResponseEntity<ApiResponse<TenantResponse>> createTenant(
-            @Valid @RequestBody CreateTenantRequest request) {
+//    @PreAuthorize("hasRole('ADMIN') or hasRole('TENANT_ADMIN')")
+    public ResponseEntity<TenantResponse> createTenant(
+            @Valid @RequestBody CreateTenantRequest request,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
 
-        log.info("Creating tenant: {} ({})", request.getName(), request.getOrganizationType());
-
-        Tenant tenant = tenantMapper.toEntity(request);
-        tenant = tenantService.createTenant(tenant);
-        TenantResponse response = tenantMapper.toResponse(tenant);
-
-        return ResponseUtil.created(response,
-                String.format("Tenant '%s' created successfully", tenant.getName()));
+        log.info("Creating tenant: {}", request.getTenantCode());
+        TenantResponse response = tenantService.createTenant(request, userId != null ? userId : "system");
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
-    @GetMapping("/{id}")
-    @Operation(summary = "Get tenant by ID")
-    public ResponseEntity<ApiResponse<TenantResponse>> getTenant(@PathVariable UUID id) {
-        log.debug("Fetching tenant: {}", id);
+    /**
+     * Update tenant information
+     */
+    @PutMapping("/{tenantId}")
+    @Operation(summary = "Update tenant", description = "Updates tenant information")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Tenant updated successfully"),
+            @ApiResponse(responseCode = "404", description = "Tenant not found"),
+            @ApiResponse(responseCode = "400", description = "Invalid request data")
+    })
+//    @PreAuthorize("hasRole('ADMIN') or (hasRole('TENANT_ADMIN') and #tenantId == authentication.principal.tenantId)")
+    public ResponseEntity<TenantResponse> updateTenant(
+            @PathVariable UUID tenantId,
+            @Valid @RequestBody UpdateTenantRequest request,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
 
-        return ResponseUtil.fromOptional(
-                tenantService.getTenantById(id),
-                tenantMapper::toResponse,
-                String.format("Tenant with ID '%s' not found", id)
-        );
+        log.info("Updating tenant: {}", tenantId);
+        TenantResponse response = tenantService.updateTenant(tenantId, request, userId != null ? userId : "system");
+        return ResponseEntity.ok(response);
     }
 
-    @GetMapping("/code/{code}")
-    @Operation(summary = "Get tenant by code")
-    public ResponseEntity<ApiResponse<TenantResponse>> getTenantByCode(@PathVariable String code) {
-        log.debug("Fetching tenant by code: {}", code);
-
-        return ResponseUtil.fromOptional(
-                tenantService.getTenantByCode(code),
-                tenantMapper::toResponse,
-                String.format("Tenant with code '%s' not found", code)
-        );
+    /**
+     * Get tenant by ID
+     */
+    @GetMapping("/{tenantId}")
+    @Operation(summary = "Get tenant by ID", description = "Retrieves tenant information by ID")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Tenant found"),
+            @ApiResponse(responseCode = "404", description = "Tenant not found")
+    })
+//    @PreAuthorize("hasRole('ADMIN') or (hasRole('TENANT_USER') and #tenantId == authentication.principal.tenantId)")
+    public ResponseEntity<TenantResponse> getTenant(@PathVariable UUID tenantId) {
+        log.info("Fetching tenant: {}", tenantId);
+        TenantResponse response = tenantService.getTenant(tenantId);
+        return ResponseEntity.ok(response);
     }
 
-    @PutMapping("/{id}")
-    @Operation(summary = "Update tenant")
-    public ResponseEntity<ApiResponse<TenantResponse>> updateTenant(
-            @PathVariable UUID id,
-            @Valid @RequestBody UpdateTenantRequest request) {
-
-        log.info("Updating tenant: {}", id);
-
-        Tenant updates = tenantMapper.toEntity(request);
-        Tenant tenant = tenantService.updateTenant(id, updates);
-
-        return ResponseUtil.success(
-                tenantMapper.toResponse(tenant),
-                "Tenant updated successfully"
-        );
+    /**
+     * Get tenant by code
+     */
+    @GetMapping("/code/{tenantCode}")
+    @Operation(summary = "Get tenant by code", description = "Retrieves tenant information by tenant code")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Tenant found"),
+            @ApiResponse(responseCode = "404", description = "Tenant not found")
+    })
+//    @PreAuthorize("hasRole('ADMIN') or hasRole('TENANT_ADMIN')")
+    public ResponseEntity<TenantResponse> getTenantByCode(@PathVariable String tenantCode) {
+        log.info("Fetching tenant by code: {}", tenantCode);
+        TenantResponse response = tenantService.getTenantByCode(tenantCode);
+        return ResponseEntity.ok(response);
     }
 
-    @DeleteMapping("/{id}")
-    @Operation(summary = "Delete tenant")
-    public ResponseEntity<ApiResponse<Void>> deleteTenant(@PathVariable UUID id) {
-        log.warn("Marking tenant for deletion: {}", id);
-
-        tenantService.markForDeletion(id);
-
-        return ResponseUtil.noContent("Tenant marked for deletion successfully");
-    }
-
-    @PostMapping("/{id}/activate")
-    @Operation(summary = "Activate tenant")
-    public ResponseEntity<ApiResponse<TenantResponse>> activateTenant(@PathVariable UUID id) {
-        log.info("Activating tenant: {}", id);
-
-        Tenant tenant = tenantService.activateTenant(id);
-
-        return ResponseUtil.success(
-                tenantMapper.toResponse(tenant),
-                "Tenant activated successfully"
-        );
-    }
-
-    @PostMapping("/{id}/suspend")
-    @Operation(summary = "Suspend tenant")
-    public ResponseEntity<ApiResponse<TenantResponse>> suspendTenant(
-            @PathVariable UUID id,
-            @RequestParam String reason) {
-
-        log.warn("Suspending tenant: {} (Reason: {})", id, reason);
-
-        Tenant tenant = tenantService.suspendTenant(id, reason);
-
-        return ResponseUtil.success(
-                tenantMapper.toResponse(tenant),
-                String.format("Tenant suspended: %s", reason)
-        );
-    }
-
-    @PostMapping("/{id}/verify")
-    @Operation(summary = "Verify tenant")
-    public ResponseEntity<ApiResponse<TenantResponse>> verifyTenant(
-            @PathVariable UUID id,
-            @RequestParam String verifiedBy,
-            @RequestParam(required = false) String verificationDocument) {
-
-        log.info("Verifying tenant: {} by {}", id, verifiedBy);
-
-        Tenant tenant = tenantService.verifyTenant(id, verifiedBy, verificationDocument);
-
-        return ResponseUtil.success(
-                tenantMapper.toResponse(tenant),
-                String.format("Tenant verified by %s", verifiedBy)
-        );
-    }
-
+    /**
+     * List all tenants
+     */
     @GetMapping
-    @Operation(summary = "List tenants with pagination")
-    public ResponseEntity<ApiResponse<List<TenantResponse>>> listTenants(
-            @RequestParam(required = false) OrganizationType organizationType,
-            @RequestParam(required = false) String status,
-            @RequestParam(required = false) String search,
-            @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
+    @Operation(summary = "List tenants", description = "Lists all tenants with pagination")
+//    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Page<TenantSummaryResponse>> listTenants(
+            @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable,
+            @RequestParam(required = false) TenantStatus status,
+            @RequestParam(required = false) OrganizationType type) {
 
-        log.debug("Listing tenants - Type: {}, Status: {}, Search: {}",
-                organizationType, status, search);
+        log.info("Listing tenants - page: {}, size: {}", pageable.getPageNumber(), pageable.getPageSize());
 
-        Page<Tenant> tenants = tenantService.searchTenants(search, pageable);
-        Page<TenantResponse> responsePage = tenants.map(tenantMapper::toResponse);
+        Page<TenantSummaryResponse> response;
+        if (status != null) {
+            response = tenantService.listTenantsByStatus(status, pageable);
+        } else if (type != null) {
+            response = tenantService.listTenantsByType(type, pageable);
+        } else {
+            response = tenantService.listTenants(pageable);
+        }
 
-        return ResponseUtil.paginated(responsePage);
+        return ResponseEntity.ok(response);
     }
 
-    @GetMapping("/me")
-    @Operation(summary = "Get current tenant")
-    public ResponseEntity<ApiResponse<TenantResponse>> getCurrentTenant(
-            @RequestHeader("X-Tenant-ID") String tenantId) {
+    /**
+     * Activate a tenant
+     */
+    @PostMapping("/{tenantId}/activate")
+    @Operation(summary = "Activate tenant", description = "Activates a pending or trial tenant")
+//    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Map<String, String>> activateTenant(
+            @PathVariable UUID tenantId,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
 
-        log.debug("Fetching current tenant: {}", tenantId);
+        log.info("Activating tenant: {}", tenantId);
+        tenantService.activateTenant(tenantId, userId != null ? userId : "system");
 
-        return ResponseUtil.fromOptional(
-                tenantService.getTenantById(UUID.fromString(tenantId)),
-                tenantMapper::toResponse,
-                "Current tenant not found"
-        );
+        return ResponseEntity.ok(Map.of(
+                "status", "success",
+                "message", "Tenant activated successfully"
+        ));
     }
 
+    /**
+     * Suspend a tenant
+     */
+    @PostMapping("/{tenantId}/suspend")
+    @Operation(summary = "Suspend tenant", description = "Suspends an active tenant")
+//    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<TenantResponse> suspendTenant(
+            @PathVariable UUID tenantId,
+            @RequestParam String reason,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+
+        log.info("Suspending tenant: {}, reason: {}", tenantId, reason);
+        TenantResponse response = tenantService.suspendTenant(tenantId, reason, userId != null ? userId : "system");
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Reactivate a suspended tenant
+     */
+    @PostMapping("/{tenantId}/reactivate")
+    @Operation(summary = "Reactivate tenant", description = "Reactivates a suspended tenant")
+//    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<TenantResponse> reactivateTenant(
+            @PathVariable UUID tenantId,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+
+        log.info("Reactivating tenant: {}", tenantId);
+        TenantResponse response = tenantService.reactivateTenant(tenantId, userId != null ? userId : "system");
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Delete a tenant
+     */
+    @DeleteMapping("/{tenantId}")
+    @Operation(summary = "Delete tenant", description = "Soft deletes a tenant")
+//    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Map<String, String>> deleteTenant(
+            @PathVariable UUID tenantId,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+
+        log.info("Deleting tenant: {}", tenantId);
+        tenantService.deleteTenant(tenantId, userId != null ? userId : "system");
+
+        return ResponseEntity.ok(Map.of(
+                "status", "success",
+                "message", "Tenant deleted successfully"
+        ));
+    }
+
+    /**
+     * Get tenant statistics
+     */
     @GetMapping("/statistics")
-    @Operation(summary = "Get tenant statistics")
-    public ResponseEntity<ApiResponse<TenantStatisticsResponse>> getTenantStatistics() {
-        log.debug("Fetching tenant statistics");
-
-        TenantService.TenantStatistics stats = tenantService.getTenantStatistics();
-        TenantStatisticsResponse response = TenantStatisticsResponse.builder()
-                .totalTenants(stats.getTotalTenants())
-                .activeTenants(stats.getActiveTenants())
-                .statisticsByType(stats.getStatisticsByType())
-                .build();
-
-        return ResponseUtil.success(response, "Statistics retrieved successfully");
+    @Operation(summary = "Get tenant statistics", description = "Returns statistics about tenants")
+//    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Map<String, Object>> getTenantStatistics() {
+        log.info("Fetching tenant statistics");
+        Map<String, Object> stats = tenantService.getTenantStatistics();
+        return ResponseEntity.ok(stats);
     }
 
-    @GetMapping("/{id}/children")
-    @Operation(summary = "Get child tenants")
-    public ResponseEntity<ApiResponse<List<TenantResponse>>> getChildTenants(@PathVariable UUID id) {
-        log.debug("Fetching children for tenant: {}", id);
+    // ===== Subscription Endpoints =====
 
-        List<Tenant> children = hierarchyService.getChildren(id);
-        List<TenantResponse> response = children.stream()
-                .map(tenantMapper::toResponse)
-                .collect(Collectors.toList());
+    /**
+     * Get tenant subscription
+     */
+    @GetMapping("/{tenantId}/subscription")
+    @Operation(summary = "Get tenant subscription", description = "Retrieves subscription details for a tenant")
+//    @PreAuthorize("hasRole('ADMIN') or (hasRole('TENANT_ADMIN') and #tenantId == authentication.principal.tenantId)")
+    public ResponseEntity<SubscriptionResponse> getTenantSubscription(@PathVariable UUID tenantId) {
+        log.info("Fetching subscription for tenant: {}", tenantId);
+        SubscriptionResponse response = subscriptionService.getSubscriptionByTenantId(tenantId);
+        return ResponseEntity.ok(response);
+    }
 
-        return ResponseUtil.success(response,
-                String.format("Found %d child tenants", response.size()));
+    /**
+     * Update tenant subscription
+     */
+    @PutMapping("/{tenantId}/subscription")
+    @Operation(summary = "Update subscription", description = "Updates tenant subscription plan")
+//    @PreAuthorize("hasRole('ADMIN') or (hasRole('TENANT_ADMIN') and #tenantId == authentication.principal.tenantId)")
+    public ResponseEntity<SubscriptionResponse> updateSubscription(
+            @PathVariable UUID tenantId,
+            @Valid @RequestBody UpdateSubscriptionRequest request,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+
+        log.info("Updating subscription for tenant: {}", tenantId);
+        SubscriptionResponse response = subscriptionService.updateSubscription(tenantId, request, userId);
+        return ResponseEntity.ok(response);
+    }
+
+    // ===== Feature Flag Endpoints =====
+
+    /**
+     * Get tenant feature flags
+     */
+    @GetMapping("/{tenantId}/features")
+    @Operation(summary = "Get feature flags", description = "Lists all feature flags for a tenant")
+//    @PreAuthorize("hasRole('ADMIN') or (hasRole('TENANT_USER') and #tenantId == authentication.principal.tenantId)")
+    public ResponseEntity<List<FeatureFlagResponse>> getTenantFeatures(@PathVariable UUID tenantId) {
+        log.info("Fetching features for tenant: {}", tenantId);
+        List<FeatureFlagResponse> features = featureFlagService.getTenantFeatures(tenantId);
+        return ResponseEntity.ok(features);
+    }
+
+    /**
+     * Update feature flag
+     */
+    @PutMapping("/{tenantId}/features/{featureCode}")
+    @Operation(summary = "Update feature flag", description = "Enables or disables a feature for a tenant")
+//    @PreAuthorize("hasRole('ADMIN') or (hasRole('TENANT_ADMIN') and #tenantId == authentication.principal.tenantId)")
+    public ResponseEntity<FeatureFlagResponse> updateFeatureFlag(
+            @PathVariable UUID tenantId,
+            @PathVariable String featureCode,
+            @RequestParam boolean enabled,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+
+        log.info("Updating feature {} for tenant: {}, enabled: {}", featureCode, tenantId, enabled);
+        FeatureFlagResponse response = featureFlagService.updateFeatureFlag(tenantId, featureCode, enabled, userId);
+        return ResponseEntity.ok(response);
+    }
+
+    // ===== Settings Endpoints =====
+
+    /**
+     * Get tenant settings
+     */
+    @GetMapping("/{tenantId}/settings")
+    @Operation(summary = "Get tenant settings", description = "Retrieves settings for a tenant")
+//    @PreAuthorize("hasRole('ADMIN') or (hasRole('TENANT_ADMIN') and #tenantId == authentication.principal.tenantId)")
+    public ResponseEntity<TenantSettingsResponse> getTenantSettings(@PathVariable UUID tenantId) {
+        log.info("Fetching settings for tenant: {}", tenantId);
+        TenantSettingsResponse response = settingsService.getTenantSettings(tenantId);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Update tenant settings
+     */
+    @PutMapping("/{tenantId}/settings")
+    @Operation(summary = "Update tenant settings", description = "Updates settings for a tenant")
+//    @PreAuthorize("hasRole('ADMIN') or (hasRole('TENANT_ADMIN') and #tenantId == authentication.principal.tenantId)")
+    public ResponseEntity<TenantSettingsResponse> updateTenantSettings(
+            @PathVariable UUID tenantId,
+            @Valid @RequestBody TenantSettingsRequest request,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+
+        log.info("Updating settings for tenant: {}", tenantId);
+        TenantSettingsResponse response = settingsService.updateTenantSettings(tenantId, request, userId);
+        return ResponseEntity.ok(response);
     }
 }

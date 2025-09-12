@@ -3,29 +3,30 @@ package com.nnipa.tenant.entity;
 import jakarta.persistence.*;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.annotations.Where;
+import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.time.LocalDate;
-
-/**
- * Usage record entity for tracking resource consumption per tenant.
- * Used for usage-based billing and monitoring.
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.Map; /**
+ * Usage Record entity for tracking metered billing
  */
 @Entity
 @Table(name = "usage_records", indexes = {
         @Index(name = "idx_usage_subscription", columnList = "subscription_id"),
         @Index(name = "idx_usage_date", columnList = "usage_date"),
         @Index(name = "idx_usage_metric", columnList = "metric_name"),
-        @Index(name = "idx_usage_subscription_date", columnList = "subscription_id, usage_date")
+        @Index(name = "idx_usage_subscription_date", columnList = "subscription_id,usage_date")
 })
-@Getter
-@Setter
+@Data
+@SuperBuilder
 @NoArgsConstructor
 @AllArgsConstructor
-@SuperBuilder
-@ToString(exclude = "subscription")
-@EqualsAndHashCode(callSuper = true, exclude = "subscription")
+@EqualsAndHashCode(callSuper = true)
+@Where(clause = "is_deleted = false")
 public class UsageRecord extends BaseEntity {
 
     @ManyToOne(fetch = FetchType.LAZY)
@@ -39,13 +40,14 @@ public class UsageRecord extends BaseEntity {
     private String metricName;
 
     @Column(name = "metric_category", length = 50)
-    private String metricCategory; // COMPUTE, STORAGE, API, DATA, USERS
+    private String metricCategory;
 
+    // Quantities and billing
     @Column(name = "quantity", nullable = false, precision = 15, scale = 4)
     private BigDecimal quantity;
 
     @Column(name = "unit", length = 50)
-    private String unit; // GB, API_CALLS, COMPUTE_HOURS, USERS, PROJECTS
+    private String unit;
 
     @Column(name = "rate", precision = 10, scale = 4)
     private BigDecimal rate;
@@ -53,6 +55,7 @@ public class UsageRecord extends BaseEntity {
     @Column(name = "amount", precision = 10, scale = 2)
     private BigDecimal amount;
 
+    // Billing flags
     @Column(name = "is_billable", nullable = false)
     private Boolean isBillable = true;
 
@@ -65,43 +68,36 @@ public class UsageRecord extends BaseEntity {
     @Column(name = "overage_quantity", precision = 15, scale = 4)
     private BigDecimal overageQuantity;
 
+    // Metadata
     @Column(name = "description", columnDefinition = "TEXT")
     private String description;
 
-    @Column(name = "metadata_json", columnDefinition = "TEXT")
-    private String metadataJson;
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "metadata_json", columnDefinition = "jsonb")
+    private Map<String, Object> metadataJson = new HashMap<>();
 
+    // Tracking
     @Column(name = "recorded_at", nullable = false)
-    private Instant recordedAt;
+    private LocalDateTime recordedAt;
 
     @Column(name = "billed_at")
-    private Instant billedAt;
+    private LocalDateTime billedAt;
 
     @Column(name = "invoice_id", length = 100)
     private String invoiceId;
 
-    // Helper Methods
-
-    /**
-     * Calculates the billable amount based on quantity and rate.
-     */
-    public BigDecimal calculateAmount() {
-        if (!isBillable || rate == null) {
-            return BigDecimal.ZERO;
+    @PrePersist
+    @Override
+    protected void onCreate() {
+        super.onCreate();
+        if (recordedAt == null) {
+            recordedAt = LocalDateTime.now();
         }
-
-        BigDecimal billableQuantity = isOverage && overageQuantity != null ?
-                overageQuantity : quantity;
-
-        amount = billableQuantity.multiply(rate);
-        return amount;
-    }
-
-    /**
-     * Marks the record as billed.
-     */
-    public void markAsBilled(String invoiceId) {
-        this.billedAt = Instant.now();
-        this.invoiceId = invoiceId;
+        if (isBillable == null) {
+            isBillable = true;
+        }
+        if (isOverage == null) {
+            isOverage = false;
+        }
     }
 }

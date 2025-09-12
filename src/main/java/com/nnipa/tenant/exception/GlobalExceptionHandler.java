@@ -1,449 +1,197 @@
 package com.nnipa.tenant.exception;
 
-import com.nnipa.tenant.dto.response.ApiResponse;
-import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
-import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
-import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.context.request.WebRequest;
 
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.UUID;
 
 /**
  * Global exception handler for REST API
- * Provides centralized error handling and consistent error responses
  */
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
     /**
-     * Handle TenantNotFoundException
-     */
-    /**
-     * Handle TenantNotFoundException
-     */
-    @ExceptionHandler(TenantNotFoundException.class)
-    public ResponseEntity<ApiResponse<Void>> handleTenantNotFoundException(
-            TenantNotFoundException ex, HttpServletRequest request) {
-
-        log.error("Tenant not found: {}", ex.getMessage());
-
-        ApiResponse<Void> response = ApiResponse.error(
-                "Tenant not found",
-                ApiResponse.ErrorDetails.builder()
-                        .code(ex.getErrorCode())
-                        .details(ex.getMessage())
-                        .build()
-        );
-        response.setRequestId(generateRequestId());
-
-        return ResponseEntity.status(ex.getHttpStatus()).body(response);
-    }
-
-    /**
-     * Handle DuplicateTenantException
-     */
-    @ExceptionHandler(DuplicateTenantException.class)
-    public ResponseEntity<ApiResponse<Void>> handleDuplicateTenantException(
-            DuplicateTenantException ex, HttpServletRequest request) {
-
-        log.error("Duplicate tenant: {}", ex.getMessage());
-
-        ApiResponse<Void> response = ApiResponse.error(
-                "Duplicate tenant",
-                ApiResponse.ErrorDetails.builder()
-                        .code(ex.getErrorCode())
-                        .details(ex.getMessage())
-                        .build()
-        );
-        response.setRequestId(generateRequestId());
-
-        return ResponseEntity.status(ex.getHttpStatus()).body(response);
-    }
-
-    /**
-     * Handle TenantAlreadyExistsException
-     */
-    @ExceptionHandler(TenantAlreadyExistsException.class)
-    public ResponseEntity<ApiResponse<Void>> handleTenantAlreadyExistsException(
-            TenantAlreadyExistsException ex, HttpServletRequest request) {
-
-        log.error("Tenant already exists: {}", ex.getMessage());
-
-        ApiResponse<Void> response = ApiResponse.error(
-                "Tenant already exists",
-                ApiResponse.ErrorDetails.builder()
-                        .code(ex.getErrorCode())
-                        .details(ex.getMessage())
-                        .build()
-        );
-        response.setRequestId(generateRequestId());
-
-        return ResponseEntity.status(ex.getHttpStatus()).body(response);
-    }
-
-    /**
-     * Handle TenantValidationException
-     */
-    @ExceptionHandler(TenantValidationException.class)
-    public ResponseEntity<ApiResponse<Void>> handleTenantValidationException(
-            TenantValidationException ex, HttpServletRequest request) {
-
-        log.error("Tenant validation failed: {}", ex.getMessage());
-
-        ApiResponse<Void> response = ApiResponse.error(
-                "Validation failed",
-                ApiResponse.ErrorDetails.builder()
-                        .code(ex.getErrorCode())
-                        .details(ex.getMessage())
-                        .build()
-        );
-        response.setRequestId(generateRequestId());
-
-        return ResponseEntity.status(ex.getHttpStatus()).body(response);
-    }
-
-    /**
-     * Handle ValidationException
-     */
-    @ExceptionHandler(ValidationException.class)
-    public ResponseEntity<ApiResponse<Void>> handleValidationException(
-            ValidationException ex, HttpServletRequest request) {
-
-        log.error("Validation error: {}", ex.getMessage());
-
-        ApiResponse<Void> response = ApiResponse.error(
-                "Validation failed",
-                ApiResponse.ErrorDetails.builder()
-                        .code(ex.getErrorCode())
-                        .details(ex.getMessage())
-                        .build()
-        );
-        response.setRequestId(generateRequestId());
-
-        return ResponseEntity.status(ex.getHttpStatus()).body(response);
-    }
-
-    /**
-     * Handle TenantCreationException
-     */
-    @ExceptionHandler(TenantCreationException.class)
-    public ResponseEntity<ApiResponse<Void>> handleTenantCreationException(
-            TenantCreationException ex, HttpServletRequest request) {
-
-        log.error("Tenant creation failed: {}", ex.getMessage());
-
-        ApiResponse<Void> response = ApiResponse.error(
-                "Tenant creation failed",
-                ApiResponse.ErrorDetails.builder()
-                        .code(ex.getErrorCode())
-                        .details(ex.getMessage())
-                        .build()
-        );
-        response.setRequestId(generateRequestId());
-
-        return ResponseEntity.status(ex.getHttpStatus()).body(response);
-    }
-
-    /**
-     * Handle TenantLimitExceededException
-     */
-    @ExceptionHandler(TenantLimitExceededException.class)
-    public ResponseEntity<ApiResponse<Void>> handleTenantLimitExceededException(
-            TenantLimitExceededException ex, HttpServletRequest request) {
-
-        log.error("Tenant limit exceeded: {}", ex.getMessage());
-
-        ApiResponse<Void> response = ApiResponse.error(
-                "Resource limit exceeded",
-                ApiResponse.ErrorDetails.builder()
-                        .code(ex.getErrorCode())
-                        .details(ex.getMessage())
-                        .build()
-        );
-        response.setRequestId(generateRequestId());
-
-        return ResponseEntity.status(ex.getHttpStatus()).body(response);
-    }
-
-    /**
-     * Handle InvalidTenantStatusException
-     */
-    @ExceptionHandler(InvalidTenantStatusException.class)
-    public ResponseEntity<ApiResponse<Void>> handleInvalidTenantStatusException(
-            InvalidTenantStatusException ex, HttpServletRequest request) {
-
-        log.error("Invalid tenant status transition: {}", ex.getMessage());
-
-        ApiResponse<Void> response = ApiResponse.error(
-                "Invalid status transition",
-                ApiResponse.ErrorDetails.builder()
-                        .code(ex.getErrorCode())
-                        .details(ex.getMessage())
-                        .build()
-        );
-        response.setRequestId(generateRequestId());
-
-        return ResponseEntity.status(ex.getHttpStatus()).body(response);
-    }
-
-    /**
-     * Handle TenantProvisioningException
-     */
-    @ExceptionHandler(TenantProvisioningException.class)
-    public ResponseEntity<ApiResponse<Void>> handleTenantProvisioningException(
-            TenantProvisioningException ex, HttpServletRequest request) {
-
-        log.error("Tenant provisioning failed: {}", ex.getMessage(), ex);
-
-        ApiResponse<Void> response = ApiResponse.error(
-                "Provisioning failed",
-                ApiResponse.ErrorDetails.builder()
-                        .code(ex.getErrorCode())
-                        .details(ex.getMessage())
-                        .build()
-        );
-        response.setRequestId(generateRequestId());
-
-        return ResponseEntity.status(ex.getHttpStatus()).body(response);
-    }
-
-    /**
-     * Handle SubscriptionException
-     */
-    @ExceptionHandler(SubscriptionException.class)
-    public ResponseEntity<ApiResponse<Void>> handleSubscriptionException(
-            SubscriptionException ex, HttpServletRequest request) {
-
-        log.error("Subscription error: {}", ex.getMessage());
-
-        ApiResponse<Void> response = ApiResponse.error(
-                "Subscription operation failed",
-                ApiResponse.ErrorDetails.builder()
-                        .code(ex.getErrorCode())
-                        .details(ex.getMessage())
-                        .build()
-        );
-        response.setRequestId(generateRequestId());
-
-        return ResponseEntity.status(ex.getHttpStatus()).body(response);
-    }
-
-    /**
-     * Handle validation errors from @Valid annotation
+     * Handle validation exceptions
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ApiResponse<Map<String, String>>> handleValidationExceptions(
-            MethodArgumentNotValidException ex, HttpServletRequest request) {
-
-        log.error("Validation error occurred");
+    public ResponseEntity<Map<String, Object>> handleValidationExceptions(
+            MethodArgumentNotValidException ex,
+            WebRequest request) {
 
         Map<String, String> errors = new HashMap<>();
         ex.getBindingResult().getAllErrors().forEach((error) -> {
-            String fieldName = error instanceof FieldError ?
-                    ((FieldError) error).getField() : error.getObjectName();
+            String fieldName = ((FieldError) error).getField();
             String errorMessage = error.getDefaultMessage();
             errors.put(fieldName, errorMessage);
         });
 
-        ApiResponse<Map<String, String>> response = ApiResponse.error(
-                "Validation failed",
-                ApiResponse.ErrorDetails.builder()
-                        .code("VALIDATION_ERROR")
-                        .details("One or more fields have validation errors")
-                        .build()
-        );
-        response.setData(errors);
-        response.setRequestId(generateRequestId());
+        Map<String, Object> response = new HashMap<>();
+        response.put("timestamp", LocalDateTime.now());
+        response.put("status", HttpStatus.BAD_REQUEST.value());
+        response.put("error", "Validation Failed");
+        response.put("errors", errors);
+        response.put("path", request.getDescription(false).replace("uri=", ""));
 
-        log.debug("Validation errors: {}", errors);
-
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+        return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
     }
 
     /**
-     * Handle type mismatch exceptions (e.g., wrong path variable type)
+     * Handle tenant already exists exception
      */
-    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
-    public ResponseEntity<ApiResponse<Void>> handleTypeMismatchException(
-            MethodArgumentTypeMismatchException ex, HttpServletRequest request) {
+    @ExceptionHandler(TenantAlreadyExistsException.class)
+    public ResponseEntity<Map<String, Object>> handleTenantAlreadyExists(
+            TenantAlreadyExistsException ex,
+            WebRequest request) {
 
-        log.error("Type mismatch error: {}", ex.getMessage());
+        Map<String, Object> response = new HashMap<>();
+        response.put("timestamp", LocalDateTime.now());
+        response.put("status", HttpStatus.CONFLICT.value());
+        response.put("error", "Tenant Already Exists");
+        response.put("message", ex.getMessage());
+        response.put("path", request.getDescription(false).replace("uri=", ""));
 
-        String error = String.format("Parameter '%s' should be of type %s",
-                ex.getName(),
-                ex.getRequiredType() != null ?
-                        ex.getRequiredType().getSimpleName() : "unknown");
-
-        ApiResponse<Void> response = ApiResponse.error(
-                "Invalid parameter type",
-                ApiResponse.ErrorDetails.builder()
-                        .code("TYPE_MISMATCH")
-                        .field(ex.getName())
-                        .details(error)
-                        .build()
-        );
-        response.setRequestId(generateRequestId());
-
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+        return new ResponseEntity<>(response, HttpStatus.CONFLICT);
     }
 
     /**
-     * Handle IllegalArgumentException
+     * Handle tenant not found exception
+     */
+    @ExceptionHandler(TenantNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleTenantNotFound(
+            TenantNotFoundException ex,
+            WebRequest request) {
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("timestamp", LocalDateTime.now());
+        response.put("status", HttpStatus.NOT_FOUND.value());
+        response.put("error", "Tenant Not Found");
+        response.put("message", ex.getMessage());
+        response.put("path", request.getDescription(false).replace("uri=", ""));
+
+        return new ResponseEntity<>(response, HttpStatus.NOT_FOUND);
+    }
+
+    /**
+     * Handle resource not found exception
+     */
+    @ExceptionHandler(ResourceNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleResourceNotFound(
+            ResourceNotFoundException ex,
+            WebRequest request) {
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("timestamp", LocalDateTime.now());
+        response.put("status", HttpStatus.NOT_FOUND.value());
+        response.put("error", "Resource Not Found");
+        response.put("message", ex.getMessage());
+        response.put("path", request.getDescription(false).replace("uri=", ""));
+
+        return new ResponseEntity<>(response, HttpStatus.NOT_FOUND);
+    }
+
+    /**
+     * Handle billing exception
+     */
+    @ExceptionHandler(BillingException.class)
+    public ResponseEntity<Map<String, Object>> handleBillingException(
+            BillingException ex,
+            WebRequest request) {
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("timestamp", LocalDateTime.now());
+        response.put("status", HttpStatus.PAYMENT_REQUIRED.value());
+        response.put("error", "Billing Error");
+        response.put("message", ex.getMessage());
+        response.put("path", request.getDescription(false).replace("uri=", ""));
+
+        return new ResponseEntity<>(response, HttpStatus.PAYMENT_REQUIRED);
+    }
+
+    /**
+     * Handle unauthorized exception
+     */
+    @ExceptionHandler(UnauthorizedException.class)
+    public ResponseEntity<Map<String, Object>> handleUnauthorizedException(
+            UnauthorizedException ex,
+            WebRequest request) {
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("timestamp", LocalDateTime.now());
+        response.put("status", HttpStatus.FORBIDDEN.value());
+        response.put("error", "Access Denied");
+        response.put("message", ex.getMessage());
+        response.put("path", request.getDescription(false).replace("uri=", ""));
+
+        return new ResponseEntity<>(response, HttpStatus.FORBIDDEN);
+    }
+
+    /**
+     * Handle illegal state exception
+     */
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<Map<String, Object>> handleIllegalStateException(
+            IllegalStateException ex,
+            WebRequest request) {
+
+        log.error("Illegal state exception: ", ex);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("timestamp", LocalDateTime.now());
+        response.put("status", HttpStatus.BAD_REQUEST.value());
+        response.put("error", "Invalid Operation");
+        response.put("message", ex.getMessage());
+        response.put("path", request.getDescription(false).replace("uri=", ""));
+
+        return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
+    }
+
+    /**
+     * Handle illegal argument exception
      */
     @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<ApiResponse<Void>> handleIllegalArgumentException(
-            IllegalArgumentException ex, HttpServletRequest request) {
+    public ResponseEntity<Map<String, Object>> handleIllegalArgumentException(
+            IllegalArgumentException ex,
+            WebRequest request) {
 
-        log.error("Illegal argument: {}", ex.getMessage());
+        log.error("Illegal argument exception: ", ex);
 
-        ApiResponse<Void> response = ApiResponse.error(
-                "Invalid argument",
-                ApiResponse.ErrorDetails.builder()
-                        .code("ILLEGAL_ARGUMENT")
-                        .details(ex.getMessage())
-                        .build()
-        );
-        response.setRequestId(generateRequestId());
+        Map<String, Object> response = new HashMap<>();
+        response.put("timestamp", LocalDateTime.now());
+        response.put("status", HttpStatus.BAD_REQUEST.value());
+        response.put("error", "Invalid Argument");
+        response.put("message", ex.getMessage());
+        response.put("path", request.getDescription(false).replace("uri=", ""));
 
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+        return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
     }
 
     /**
-     * Handle DataIntegrityViolationException (database constraint violations)
-     */
-    @ExceptionHandler(DataIntegrityViolationException.class)
-    public ResponseEntity<ApiResponse<Void>> handleDataIntegrityViolationException(
-            DataIntegrityViolationException ex, HttpServletRequest request) {
-
-        log.error("Data integrity violation: {}", ex.getMessage());
-
-        String message = "Data integrity violation";
-        String details = "Operation violates database constraints";
-
-        // Try to extract more specific message
-        if (ex.getMessage() != null) {
-            if (ex.getMessage().contains("duplicate key") ||
-                    ex.getMessage().contains("unique constraint")) {
-                message = "Duplicate entry";
-                details = "A record with the same unique values already exists";
-            } else if (ex.getMessage().contains("foreign key")) {
-                message = "Reference constraint violation";
-                details = "Operation violates foreign key constraints";
-            } else if (ex.getMessage().contains("not null")) {
-                message = "Required field missing";
-                details = "A required field cannot be null";
-            }
-        }
-
-        ApiResponse<Void> response = ApiResponse.error(
-                message,
-                ApiResponse.ErrorDetails.builder()
-                        .code("DATA_INTEGRITY_VIOLATION")
-                        .details(details)
-                        .build()
-        );
-        response.setRequestId(generateRequestId());
-
-        return ResponseEntity.status(HttpStatus.CONFLICT).body(response);
-    }
-
-    /**
-     * Handle NoHandlerFoundException (404 errors)
-     */
-    @ExceptionHandler(NoHandlerFoundException.class)
-    public ResponseEntity<ApiResponse<Void>> handleNoHandlerFoundException(
-            NoHandlerFoundException ex, HttpServletRequest request) {
-
-        log.error("No handler found for {} {}", ex.getHttpMethod(), ex.getRequestURL());
-
-        ApiResponse<Void> response = ApiResponse.error(
-                "Resource not found",
-                ApiResponse.ErrorDetails.builder()
-                        .code("NOT_FOUND")
-                        .details(String.format("No endpoint found for %s %s",
-                                ex.getHttpMethod(), ex.getRequestURL()))
-                        .build()
-        );
-        response.setRequestId(generateRequestId());
-
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
-    }
-
-    /**
-     * Handle all other uncaught exceptions
+     * Handle generic exception
      */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ApiResponse<Void>> handleGenericException(
-            Exception ex, HttpServletRequest request) {
+    public ResponseEntity<Map<String, Object>> handleGlobalException(
+            Exception ex,
+            WebRequest request) {
 
-        log.error("Unexpected error occurred: {}", ex.getMessage(), ex);
+        log.error("Unexpected error: ", ex);
 
-        // In development, you might want to include the stack trace
-        String stackTrace = null;
-        if (isDebugMode()) {
-            stackTrace = getStackTraceAsString(ex);
-        }
+        Map<String, Object> response = new HashMap<>();
+        response.put("timestamp", LocalDateTime.now());
+        response.put("status", HttpStatus.INTERNAL_SERVER_ERROR.value());
+        response.put("error", "Internal Server Error");
+        response.put("message", "An unexpected error occurred");
+        response.put("path", request.getDescription(false).replace("uri=", ""));
 
-        ApiResponse<Void> response = ApiResponse.error(
-                "An unexpected error occurred",
-                ApiResponse.ErrorDetails.builder()
-                        .code("INTERNAL_SERVER_ERROR")
-                        .details("An unexpected error occurred. Please try again later.")
-                        .stackTrace(stackTrace)
-                        .build()
-        );
-        response.setRequestId(generateRequestId());
-
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
-    }
-
-    /**
-     * Generate a unique request ID for tracking
-     */
-    private String generateRequestId() {
-        return "req_" + UUID.randomUUID().toString();
-    }
-
-    /**
-     * Check if application is in debug mode
-     */
-    private boolean isDebugMode() {
-        String profile = System.getProperty("spring.profiles.active", "");
-        return profile.contains("dev") || profile.contains("test");
-    }
-
-    /**
-     * Convert exception stack trace to string
-     */
-    private String getStackTraceAsString(Exception ex) {
-        if (!isDebugMode()) {
-            return null;
-        }
-
-        StringBuilder sb = new StringBuilder();
-        sb.append(ex.getClass().getName()).append(": ").append(ex.getMessage()).append("\n");
-
-        StackTraceElement[] stackTrace = ex.getStackTrace();
-        int maxLines = Math.min(stackTrace.length, 10); // Limit to 10 lines
-
-        for (int i = 0; i < maxLines; i++) {
-            sb.append("\tat ").append(stackTrace[i].toString()).append("\n");
-        }
-
-        if (stackTrace.length > maxLines) {
-            sb.append("\t... ").append(stackTrace.length - maxLines).append(" more");
-        }
-
-        return sb.toString();
+        return new ResponseEntity<>(response, HttpStatus.INTERNAL_SERVER_ERROR);
     }
 }

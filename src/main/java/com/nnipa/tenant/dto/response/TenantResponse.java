@@ -1,97 +1,80 @@
 package com.nnipa.tenant.dto.response;
 
-import com.nnipa.tenant.enums.OrganizationType;
-import com.nnipa.tenant.enums.TenantIsolationStrategy;
-import com.nnipa.tenant.enums.TenantStatus;
-import io.swagger.v3.oas.annotations.media.Schema;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.nnipa.tenant.enums.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.Instant;
-import java.util.Set;
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
+/**
+ * Response DTO for tenant information
+ */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Schema(description = "Tenant information response")
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public class TenantResponse {
 
-    @Schema(description = "Tenant ID")
     private UUID id;
-
-    @Schema(description = "Unique tenant code")
     private String tenantCode;
-
-    @Schema(description = "Organization name")
     private String name;
-
-    @Schema(description = "Display name")
     private String displayName;
-
-    @Schema(description = "Organization type")
     private OrganizationType organizationType;
-
-    @Schema(description = "Tenant status")
     private TenantStatus status;
 
-    @Schema(description = "Data isolation strategy")
-    private TenantIsolationStrategy isolationStrategy;
-
-    @Schema(description = "Organization email")
+    // Contact
     private String organizationEmail;
-
-    @Schema(description = "Organization phone")
     private String organizationPhone;
-
-    @Schema(description = "Organization website")
     private String organizationWebsite;
 
-    @Schema(description = "Country")
+    // Address
+    private String addressLine1;
+    private String addressLine2;
+    private String city;
+    private String stateProvince;
+    private String postalCode;
     private String country;
 
-    @Schema(description = "Compliance frameworks")
-    private Set<String> complianceFrameworks;
+    // Status
+    private LocalDateTime activatedAt;
+    private LocalDateTime suspendedAt;
+    private String suspensionReason;
+    private LocalDateTime trialEndsAt;
 
-    @Schema(description = "Data residency region")
-    private String dataResidencyRegion;
-
-    @Schema(description = "Security level")
-    private String securityLevel;
-
-    @Schema(description = "Is verified")
+    // Verification
     private Boolean isVerified;
+    private LocalDateTime verifiedAt;
 
-    @Schema(description = "Maximum users")
+    // Limits
     private Integer maxUsers;
-
-    @Schema(description = "Maximum projects")
     private Integer maxProjects;
-
-    @Schema(description = "Storage quota in GB")
     private Integer storageQuotaGb;
-
-    @Schema(description = "API rate limit")
     private Integer apiRateLimit;
 
-    @Schema(description = "Subscription plan")
-    private String subscriptionPlan;
+    // Hierarchy
+    private UUID parentTenantId;
+    private String parentTenantCode;
+    private List<TenantSummaryResponse> childTenants;
 
-    @Schema(description = "Subscription status")
-    private String subscriptionStatus;
+    // Subscription summary
+    private SubscriptionSummaryResponse subscription;
 
-    @Schema(description = "Created timestamp")
-    private Instant createdAt;
+    // Feature flags summary
+    private Integer enabledFeaturesCount;
+    private List<String> enabledFeatureCodes;
 
-    @Schema(description = "Activated timestamp")
-    private Instant activatedAt;
-
-    @Schema(description = "Trial ends timestamp")
-    private Instant trialEndsAt;
-
-    @Schema(description = "Expires timestamp")
-    private Instant expiresAt;
+    // Audit
+    private LocalDateTime createdAt;
+    private String createdBy;
+    private LocalDateTime updatedAt;
+    private String updatedBy;
 }
+

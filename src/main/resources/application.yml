@@ -1,50 +1,60 @@
-# Application configuration for NNIPA Tenant Management Service
+server:
+  port: 8083
+  servlet:
+    context-path: /tenant-management
+  shutdown: graceful
+  error:
+    include-message: always
+    include-binding-errors: always
+
 spring:
   application:
     name: tenant-management-service
 
-  profiles:
-    active: ${SPRING_PROFILES_ACTIVE:dev}
 
-  # ============================================================================
-  # DATABASE CONNECTION #1: Main Application Database
-  # ============================================================================
-  # This is where the tenant management system stores its own data:
-  # - Tenant metadata (tenant records, settings, subscriptions)
-  # - User information
-  # - Audit logs for the management system itself
-  # - System configuration
-  # This database is SHARED across all tenants for management purposes
-  # ============================================================================
+  # Database Configuration
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/tenant_db_dev}
-    username: ${DB_USERNAME:tenant_dev}
-    password: ${DB_PASSWORD:dev_password}
+    url: ${DB_URL:jdbc:postgresql://localhost:5000/tenant_db}
+    username: ${DB_USERNAME:tenant_user}
+    password: ${DB_PASSWORD:tenant_pass}
     driver-class-name: org.postgresql.Driver
     hikari:
-      connection-timeout: 30000
-      maximum-pool-size: 10
+      pool-name: TenantMgmtPool
+      maximum-pool-size: ${DATABASE_POOL_SIZE:20}
       minimum-idle: 5
-      idle-timeout: 600000
+      idle-timeout: 300000
+      connection-timeout: 30000
       max-lifetime: 1800000
-      pool-name: "MainAppPool"
+      leak-detection-threshold: 60000
 
-  # JPA Configuration (uses the main datasource above)
+  # JPA Configuration
   jpa:
     hibernate:
       ddl-auto: validate
     properties:
       hibernate:
         format_sql: true
-        use_sql_comments: true
         jdbc:
           batch_size: 25
           batch_versioned_data: true
         order_inserts: true
         order_updates: true
+        generate_statistics: false
+    show-sql: false
+    open-in-view: false
 
+  # Flyway Configuration
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+    schemas: public
+    validate-on-migrate: true
+
+  # Kafka Configuration
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    bootstrap-servers: ${KAFKA_BROKERS:localhost:9092}
+
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
@@ -55,222 +65,167 @@ spring:
         max.in.flight.requests.per.connection: 5
         compression.type: snappy
         linger.ms: 10
-        batch.size: 32768
+        batch.size: 16384
+
     consumer:
-      group-id: tenant-management-service
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+      group-id: tenant-management-service
       auto-offset-reset: earliest
       enable-auto-commit: false
       properties:
-        isolation.level: read_committed
         session.timeout.ms: 30000
         heartbeat.interval.ms: 10000
-        max.poll.records: 10
-        max.poll.interval.ms: 300000
-    topics:
-      # Tenant events (produced)
-      tenant-created: nnipa.events.tenant.created
-      tenant-updated: nnipa.events.tenant.updated
-      tenant-deactivated: nnipa.events.tenant.deactivated
-      tenant-migrated: nnipa.events.tenant.migrated
-      tenant-subscription-changed: nnipa.events.tenant.subscription-changed
-      tenant-suspended: nnipa.events.tenant.suspended
-      tenant-reactivated: nnipa.events.tenant.reactivated
-      tenant-limit-exceeded: nnipa.events.tenant.limit-exceeded
-      payment-failed: nnipa.events.billing.payment-failed
-      # External events (consumed)
-      user-created: nnipa.events.user.created
-      billing-payment-failed: nnipa.events.billing.payment-failed
+        isolation.level: read_committed
 
-  # Flyway Configuration (uses the main datasource above)
-  flyway:
-    enabled: true
-    baseline-on-migrate: true
-    locations: classpath:db/migration
+    listener:
+      ack-mode: manual
+      concurrency: 3
 
-  # Jackson Configuration
-  jackson:
-    default-property-inclusion: non_null
-    serialization:
-      write-dates-as-timestamps: false
-      indent-output: false
-    deserialization:
-      fail-on-unknown-properties: false
-    time-zone: UTC
-    date-format: yyyy-MM-dd'T'HH:mm:ss.SSS'Z'
-
-  # Redis Cache Configuration
+  # Redis Configuration
   data:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
-      password: ${REDIS_PASSWORD:}
-      timeout: 2000ms
+      database: 3
+      timeout: 5000
       lettuce:
         pool:
-          max-active: 8
+          max-active: 10
           max-idle: 8
-          min-idle: 0
+          min-idle: 2
+          max-wait: -1ms
 
   # Cache Configuration
   cache:
-    type: redis
-    redis:
-      time-to-live: 600000
-      cache-null-values: false
-      use-key-prefix: true
-      key-prefix: "nnipa:"
+    type: caffeine
+    caffeine:
+      spec: maximumSize=1000,expireAfterWrite=5m,recordStats
+    cache-names:
+      - tenants
+      - subscriptions
+      - feature-flags
+      - tenant-settings
+      - billing-details
 
-# Server Configuration
-server:
-  port: 8080
-  servlet:
-    context-path: /tenant-management
+# Schema Registry Configuration
+schema:
+  registry:
+    url: ${SCHEMA_REGISTRY_URL:http://localhost:8081}
 
-# Application-specific Configuration
-app:
-  tenant:
-    # ============================================================================
-    # DATABASE CONNECTION #2: Administrative Database Connection
-    # ============================================================================
-    # This connection is used ONLY for administrative operations:
-    # - Creating new tenant databases (CREATE DATABASE statements)
-    # - Dropping tenant databases (DROP DATABASE statements)
-    # - Managing database users and permissions
-    # - Checking if databases exist
-    #
-    # This MUST connect to the 'postgres' database (PostgreSQL's system database)
-    # with a user that has CREATEDB privileges (usually 'postgres' superuser)
-    # ============================================================================
-    admin-datasource:
-      url: ${ADMIN_DB_URL:jdbc:postgresql://localhost:5001/postgres}
-      username: ${ADMIN_DB_USERNAME:postgres}
-      password: ${ADMIN_DB_PASSWORD:postgres}
-      driver-class-name: org.postgresql.Driver
+# Kafka Topics Configuration
+kafka:
+  topics:
+    # Tenant Events
+    tenant-created: nnipa.events.tenant.created
+    tenant-updated: nnipa.events.tenant.updated
+    tenant-activated: nnipa.events.tenant.activated
+    tenant-deactivated: nnipa.events.tenant.deactivated
+    tenant-suspended: nnipa.events.tenant.suspended
+    tenant-reactivated: nnipa.events.tenant.reactivated
+    tenant-deleted: nnipa.events.tenant.deleted
 
-    # ============================================================================
-    # CONFIGURATION PARAMETERS (NOT A DATABASE CONNECTION)
-    # ============================================================================
-    # These are just configuration values used when building connection strings
-    # for newly created tenant databases. They are NOT a separate connection.
-    # When a new tenant database is created, these values help construct
-    # the JDBC URL for that tenant's database.
-    # ============================================================================
-    database:
-      host: ${TENANT_DB_HOST:localhost}  # Host where tenant databases will be created
-      port: ${TENANT_DB_PORT:5001}        # Port for tenant database connections
+    # Subscription Events
+    subscription-created: nnipa.events.subscription.created
+    subscription-changed: nnipa.events.subscription.changed
+    subscription-cancelled: nnipa.events.subscription.cancelled
+    subscription-renewed: nnipa.events.subscription.renewed
+    billing-failed: nnipa.events.billing.failed
 
-    # Database naming configuration
-    database-prefix: nnipa_    # Prefix for tenant database names (e.g., nnipa_gov_doh_001)
-    schema-prefix: tenant_     # Prefix for tenant schemas (for SCHEMA_PER_TENANT strategy)
+    # Feature Flag Events
+    feature-enabled: nnipa.events.feature.enabled
+    feature-disabled: nnipa.events.feature.disabled
+    feature-updated: nnipa.events.feature.updated
 
-    # Cache settings
-    cache-ttl-minutes: 10
+    # Commands from other services
+    create-tenant-command: nnipa.commands.tenant.create
+    provision-tenant-command: nnipa.commands.tenant.provision
 
-    # Provisioning settings
-    trial-period-days: 14
-    auto-activation: false
-    max-activation-attempts: 3
+# Tenant Management Configuration
+tenant:
+  defaults:
+    trial-days: 30
+    max-users: 10
+    max-projects: 5
+    storage-quota-gb: 10
+    api-rate-limit: 1000
 
-    # Schema provisioning settings
-    schema:
-      prefix: tenant_
-      template: tenant_template
+  subscription:
+    grace-period-days: 7
+    auto-renew-enabled: true
+    payment-retry-attempts: 3
 
-    # Subscription defaults
-    subscription:
-      default-trial-days: 14
-      auto-renew: true
-      grace-period-days: 7
+  billing:
+    stripe:
+      enabled: ${STRIPE_ENABLED:false}
+      api-key: ${STRIPE_API_KEY:}
+      webhook-secret: ${STRIPE_WEBHOOK_SECRET:}
+    default-currency: USD
+    tax-rate: 0.0
 
-    # Feature flag defaults
-    features:
-      auto-enable-basic: true
-      trial-features:
-        - ADVANCED_ANALYTICS
-        - DATA_EXPORT
-        - CUSTOM_DASHBOARDS
+  feature-flags:
+    default-enabled:
+      - BASIC_ANALYTICS
+      - STANDARD_REPORTS
+      - EMAIL_NOTIFICATIONS
+    premium-features:
+      - ADVANCED_ANALYTICS
+      - ML_MODELS
+      - CUSTOM_DASHBOARDS
+      - API_ACCESS
+      - PRIORITY_SUPPORT
 
-    # Usage tracking
-    usage:
-      tracking-interval: HOURLY
-      aggregation-interval: DAILY
-      retention-days: 90
+# Resilience4j Configuration
+resilience4j:
+  circuitbreaker:
+    instances:
+      kafka-producer:
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
 
-    # Organization defaults by type
-    organization-defaults:
-      government:
-        compliance-frameworks:
-          - FISMA
-          - FedRAMP
-        data-retention-days: 2555  # 7 years
-      healthcare:
-        compliance-frameworks:
-          - HIPAA
-        data-retention-days: 2190  # 6 years
-      financial:
-        compliance-frameworks:
-          - SOX
-          - PCI_DSS
-        data-retention-days: 2555  # 7 years
-      academic:
-        compliance-frameworks:
-          - FERPA
-        data-retention-days: 1095  # 3 years
-      default:
-        compliance-frameworks:
-          - GDPR
-        data-retention-days: 365   # 1 year
+      redis-cache:
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 20s
 
-  # Security Configuration
-  security:
-    jwt-secret: ${JWT_SECRET:your-secret-key}
-    jwt-expiration-ms: 3600000
+  ratelimiter:
+    instances:
+      api-limiter:
+        limit-for-period: 100
+        limit-refresh-period: 1s
+        timeout-duration: 5s
 
-  # Integration URLs
-  integration:
-    auth-service-url: ${AUTH_SERVICE_URL:http://localhost:8081}
-    billing-service-url: ${BILLING_SERVICE_URL:http://localhost:8082}
-    notification-service-url: ${NOTIFICATION_SERVICE_URL:http://localhost:8083}
-
-  # Async processing configuration
-  async:
-    core-pool-size: 4
-    max-pool-size: 10
-    queue-capacity: 100
-    thread-name-prefix: nnipa-async-
-
-  # Encryption for database passwords
-  encryption:
-    key: ${ENCRYPTION_KEY:DefaultEncryptionKey123}  # Change in production!
-
-# Spring task execution configuration
-task:
-  execution:
-    pool:
-      core-size: 4
-      max-size: 10
-      queue-capacity: 100
-  scheduling:
-    pool:
-      size: 2
-
-# Actuator Configuration
+# Management & Monitoring
 management:
   endpoints:
     web:
-      base-path: /actuator
       exposure:
-        include: health,info,metrics,prometheus
+        include: health,info,metrics,prometheus,caches,flyway
   endpoint:
     health:
-      show-details: when-authorized
+      show-details: always
+      probes:
+        enabled: true
   health:
-    redis:
-      enabled: true
     db:
       enabled: true
+    redis:
+      enabled: true
+    kafka:
+      enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      environment: ${spring.profiles.active}
+  prometheus:
+    metrics:
+      export:
+        enabled: true
 
 # API Documentation
 springdoc:
@@ -278,21 +233,24 @@ springdoc:
     path: /api-docs
   swagger-ui:
     path: /swagger-ui.html
-    enabled: true
+    tags-sorter: alpha
+    operations-sorter: alpha
+  packages-to-scan: com.nnipa.tenant.controller
+  paths-to-match: /api/**
 
 # Logging Configuration
 logging:
   level:
     root: INFO
-    com.nnipa: DEBUG
-    com.nnipa.tenant.service.DatabaseProvisioningService: DEBUG
-    com.nnipa.tenant.service.TenantProvisioningService: DEBUG
-    org.springframework.security: WARN
-    org.hibernate: WARN
+    com.nnipa.tenant: DEBUG
+    org.springframework.kafka: INFO
+    org.apache.kafka: WARN
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
     file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
   file:
-    name: logs/tenant-management.log
+    name: logs/tenant-management-service.log
     max-size: 10MB
     max-history: 30

@@ -1,60 +1,56 @@
 package com.nnipa.tenant.repository;
 
-import com.nnipa.tenant.entity.Tenant;
-import com.nnipa.tenant.enums.OrganizationType;
-import com.nnipa.tenant.enums.TenantStatus;
+import com.nnipa.tenant.entity.*;
+import com.nnipa.tenant.enums.*;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
-import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+/**
+ * Repository for Tenant entity
+ */
 @Repository
 public interface TenantRepository extends JpaRepository<Tenant, UUID> {
 
     Optional<Tenant> findByTenantCode(String tenantCode);
 
+    Optional<Tenant> findByTenantCodeAndIsDeletedFalse(String tenantCode);
+
     boolean existsByTenantCode(String tenantCode);
 
-    boolean existsByOrganizationEmail(String email);
+    Page<Tenant> findByStatus(TenantStatus status, Pageable pageable);
 
-    List<Tenant> findByOrganizationType(OrganizationType type);
+    Page<Tenant> findByOrganizationType(OrganizationType type, Pageable pageable);
 
-    List<Tenant> findByStatus(TenantStatus status);
+    @Query("SELECT t FROM Tenant t WHERE t.parentTenant.id = :parentId AND t.isDeleted = false")
+    List<Tenant> findChildTenants(@Param("parentId") UUID parentId);
 
-    List<Tenant> findByStatusIn(List<TenantStatus> statuses);
+    @Query("SELECT t FROM Tenant t WHERE t.trialEndsAt <= :date AND t.status = 'TRIAL'")
+    List<Tenant> findExpiringTrials(@Param("date") LocalDateTime date);
 
-    List<Tenant> findByParentTenant(Tenant parentTenant);
+    @Query("SELECT COUNT(t) FROM Tenant t WHERE t.status = :status AND t.isDeleted = false")
+    long countByStatus(@Param("status") TenantStatus status);
 
-    Long countByOrganizationType(OrganizationType type);
+    @Modifying
+    @Query("UPDATE Tenant t SET t.status = :status WHERE t.id = :id")
+    void updateStatus(@Param("id") UUID id, @Param("status") TenantStatus status);
 
-    Long countByStatusIn(List<TenantStatus> statuses);
-
-    @Query("SELECT t FROM Tenant t WHERE " +
-            "LOWER(t.name) LIKE LOWER(CONCAT('%', :search, '%')) OR " +
-            "LOWER(t.tenantCode) LIKE LOWER(CONCAT('%', :search, '%')) OR " +
-            "LOWER(t.organizationEmail) LIKE LOWER(CONCAT('%', :search, '%'))")
-    Page<Tenant> searchTenants(@Param("search") String search, Pageable pageable);
-
-    @Query("SELECT t FROM Tenant t WHERE t.status IN :statuses")
-    Page<Tenant> findByStatusIn(@Param("statuses") List<TenantStatus> statuses, Pageable pageable);
-
-    @Query("SELECT t FROM Tenant t LEFT JOIN t.subscription s " +
-            "WHERE s.nextRenewalDate <= :expiryDate AND s.autoRenew = false")
-    List<Tenant> findExpiringTenants(@Param("expiryDate") Instant expiryDate);
-
-    @Query("SELECT t FROM Tenant t WHERE t.status = 'TRIAL' AND t.trialEndsAt <= :endDate")
-    List<Tenant> findTrialsEndingSoon(@Param("endDate") Instant endDate);
-
-    @Query("SELECT t FROM Tenant t WHERE t.organizationType = :type AND t.status = :status")
-    List<Tenant> findByOrganizationTypeAndStatus(
-            @Param("type") OrganizationType type,
-            @Param("status") TenantStatus status
-    );
+    @Query(value = """
+        SELECT t.* FROM tenants t
+        JOIN subscriptions s ON t.id = s.tenant_id
+        WHERE s.next_renewal_date <= :date
+        AND s.auto_renew = true
+        AND t.is_deleted = false
+        """, nativeQuery = true)
+    List<Tenant> findTenantsNeedingRenewal(@Param("date") LocalDateTime date);
 }
+

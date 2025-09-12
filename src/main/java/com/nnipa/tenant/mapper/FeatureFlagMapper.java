@@ -3,25 +3,30 @@ package com.nnipa.tenant.mapper;
 import com.nnipa.tenant.dto.request.FeatureFlagRequest;
 import com.nnipa.tenant.dto.response.FeatureFlagResponse;
 import com.nnipa.tenant.entity.FeatureFlag;
-import org.mapstruct.Mapper;
-import org.mapstruct.Mapping;
+import org.mapstruct.*;
 
-import java.time.temporal.ChronoUnit;
-
-@Mapper(componentModel = "spring", imports = {ChronoUnit.class, java.time.Instant.class,})
+import java.util.List; /**
+ * Mapper for FeatureFlag entity
+ */
+@Mapper(componentModel = "spring", nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)
 public interface FeatureFlagMapper {
 
-    @Mapping(expression = "java(feature.isAccessible())", target = "isAccessible")
-    @Mapping(expression = "java(feature.getTrialEnabled() && feature.getEnabledUntil() != null ? (int)ChronoUnit.DAYS.between(Instant.now(), feature.getEnabledUntil()) : null)",
-            target = "trialDaysRemaining")
-    @Mapping(expression = "java(feature.getUsageLimit() != null && feature.getUsageLimit() > 0 ? (feature.getCurrentUsage() * 100 / feature.getUsageLimit()) : null)",
-            target = "usagePercentage")
-    FeatureFlagResponse toResponse(FeatureFlag feature);
+    @Mapping(target = "tenantId", source = "tenant.id")
+    @Mapping(target = "isAvailable", ignore = true) // Will be calculated
+    @Mapping(target = "config", source = "configJson")
+    @Mapping(target = "metadata", source = "metadataJson")
+    FeatureFlagResponse toResponse(FeatureFlag featureFlag);
+
+    List<FeatureFlagResponse> toResponseList(List<FeatureFlag> featureFlags);
 
     @Mapping(target = "id", ignore = true)
     @Mapping(target = "tenant", ignore = true)
-    @Mapping(target = "featureName", ignore = true)
-    @Mapping(target = "createdAt", ignore = true)
-    @Mapping(target = "updatedAt", ignore = true)
+    @Mapping(target = "configJson", source = "config")
+    @Mapping(target = "metadataJson", source = "metadata")
     FeatureFlag toEntity(FeatureFlagRequest request);
+
+    @BeanMapping(nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)
+    @Mapping(target = "configJson", source = "config")
+    @Mapping(target = "metadataJson", source = "metadata")
+    void updateEntity(@MappingTarget FeatureFlag featureFlag, FeatureFlagRequest request);
 }

@@ -1,13 +1,15 @@
 package com.nnipa.tenant.exception;
 
-import org.springframework.http.HttpStatus; /**
- * Exception thrown when a tenant already exists.
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.ResponseStatus;
+
+/**
+ * Exception thrown when a tenant already exists
  */
-public class TenantAlreadyExistsException extends TenantException {
-    public TenantAlreadyExistsException(String subdomain) {
-        super(String.format("Tenant already exists with subdomain: %s", subdomain),
-                "TENANT_ALREADY_EXISTS",
-                HttpStatus.CONFLICT,
-                subdomain);
+@ResponseStatus(HttpStatus.CONFLICT)
+public class TenantAlreadyExistsException extends RuntimeException {
+    public TenantAlreadyExistsException(String message) {
+        super(message);
     }
 }
+

@@ -1,38 +1,38 @@
 package com.nnipa.tenant.entity;
 
-import com.nnipa.tenant.enums.*;
+import com.nnipa.tenant.enums.IsolationStrategy;
+import com.nnipa.tenant.enums.OrganizationType;
+import com.nnipa.tenant.enums.TenantStatus;
 import jakarta.persistence.*;
-import lombok.*;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
-import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.Where;
-import org.hibernate.type.SqlTypes;
 
-import java.time.Instant;
-import java.util.HashMap;
+import java.time.LocalDateTime;
 import java.util.HashSet;
-import java.util.Map;
 import java.util.Set;
 
 /**
- * Tenant entity representing an organization or individual user in the NNIPA platform.
- * Supports multiple organization types with flexible configuration.
+ * Core Tenant entity representing an organization/customer
  */
 @Entity
 @Table(name = "tenants", indexes = {
         @Index(name = "idx_tenant_code", columnList = "tenant_code", unique = true),
         @Index(name = "idx_tenant_status", columnList = "status"),
         @Index(name = "idx_tenant_org_type", columnList = "organization_type"),
+        @Index(name = "idx_tenant_parent", columnList = "parent_tenant_id"),
         @Index(name = "idx_tenant_created", columnList = "created_at"),
-        @Index(name = "idx_tenant_parent", columnList = "parent_tenant_id")
+        @Index(name = "idx_tenant_deleted", columnList = "is_deleted")
 })
-@Getter
-@Setter
+@Data
+@SuperBuilder
 @NoArgsConstructor
 @AllArgsConstructor
-@SuperBuilder
-@ToString(exclude = {"subscription", "settings", "featureFlags", "childTenants"})
-@EqualsAndHashCode(callSuper = true, exclude = {"subscription", "settings", "featureFlags", "childTenants"})
+@EqualsAndHashCode(callSuper = true)
 @Where(clause = "is_deleted = false")
 public class Tenant extends BaseEntity {
 
@@ -45,18 +45,14 @@ public class Tenant extends BaseEntity {
     @Column(name = "display_name", length = 255)
     private String displayName;
 
-    @Column(name = "description", columnDefinition = "TEXT")
-    private String description;
-
-    @Enumerated(EnumType.STRING)
     @Column(name = "organization_type", nullable = false, length = 50)
+    @Enumerated(EnumType.STRING)
     private OrganizationType organizationType;
 
-    @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 30)
+    @Enumerated(EnumType.STRING)
     private TenantStatus status;
 
-    // Organization Details
     @Column(name = "organization_email", length = 255)
     private String organizationEmail;
 
@@ -66,27 +62,9 @@ public class Tenant extends BaseEntity {
     @Column(name = "organization_website", length = 500)
     private String organizationWebsite;
 
-    // Add in metadata section:
-    @Column(name = "marked_for_deletion_at")
-    private Instant markedForDeletionAt;
-
-    @Column(name = "verified_at")
-    private Instant verifiedAt;
-
-    @Column(name = "verified_by", length = 255)
-    private String verifiedBy;
-
-    // Add metadata field for flexible storage:
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "metadata", columnDefinition = "jsonb")
-    private Map<String, Object> metadata = new HashMap<>();
-
-
-    @Column(name = "tax_id", length = 50)
-    private String taxId;
-
-    @Column(name = "business_license", length = 100)
-    private String businessLicense;
+    @Column(name = "isolation_strategy", length = 50)
+    @Enumerated(EnumType.STRING)
+    private IsolationStrategy isolationStrategy;
 
     // Address Information
     @Column(name = "address_line1", length = 255)
@@ -105,73 +83,30 @@ public class Tenant extends BaseEntity {
     private String postalCode;
 
     @Column(name = "country", length = 2)
-    private String country; // ISO 3166-1 alpha-2
+    private String country;
 
-    // Compliance and Security
-    @ElementCollection(targetClass = ComplianceFramework.class)
-    @CollectionTable(
-            name = "tenant_compliance_frameworks",
-            joinColumns = @JoinColumn(name = "tenant_id")
-    )
-    @Column(name = "framework")
-    @Enumerated(EnumType.STRING)
-    private Set<ComplianceFramework> complianceFrameworks = new HashSet<>();
+    // Status and Lifecycle
+    @Column(name = "activated_at")
+    private LocalDateTime activatedAt;
 
-    @Column(name = "data_residency_region", length = 50)
-    private String dataResidencyRegion;
+    @Column(name = "suspended_at")
+    private LocalDateTime suspendedAt;
 
-    @Column(name = "security_level", length = 20)
-    private String securityLevel; // STANDARD, ENHANCED, MAXIMUM
+    @Column(name = "suspension_reason", length = 500)
+    private String suspensionReason;
 
-    // Data Isolation Configuration
-    @Enumerated(EnumType.STRING)
-    @Column(name = "isolation_strategy")
-    private IsolationStrategy isolationStrategy;
-
-    @Column(name = "database_name", length = 100)
-    private String databaseName;
-
-    @Column(name = "schema_name", length = 100)
-    private String schemaName;
-
-    @Column(name = "database_server", length = 255)
-    private String databaseServer;
-
-    @Column(name = "database_port")
-    private Integer databasePort;
-
-    @Column(name = "connection_pool_size")
-    private Integer connectionPoolSize;
+    @Column(name = "trial_ends_at")
+    private LocalDateTime trialEndsAt;
 
     // Verification and Validation
     @Column(name = "is_verified", nullable = false)
     private Boolean isVerified = false;
 
+    @Column(name = "verified_at")
+    private LocalDateTime verifiedAt;
+
     @Column(name = "verification_document", length = 500)
     private String verificationDocument;
-
-    // Multi-tenant Hierarchy (for departments/subsidiaries)
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "parent_tenant_id")
-    private Tenant parentTenant;
-
-    @OneToMany(mappedBy = "parentTenant", cascade = CascadeType.ALL)
-    private Set<Tenant> childTenants = new HashSet<>();
-
-    // Subscription and Billing
-    @OneToOne(mappedBy = "tenant", cascade = CascadeType.ALL)
-    private Subscription subscription;
-
-    // Settings and Configuration
-    @OneToOne(mappedBy = "tenant", cascade = CascadeType.ALL)
-    private TenantSettings settings;
-
-    @ElementCollection
-    @CollectionTable(name = "tenant_feature_flags",
-            joinColumns = @JoinColumn(name = "tenant_id"))
-    @MapKeyColumn(name = "feature_name")
-    @Column(name = "enabled")
-    private Map<String, Boolean> featureFlags = new HashMap<>();
 
     // Usage and Limits
     @Column(name = "max_users")
@@ -186,126 +121,60 @@ public class Tenant extends BaseEntity {
     @Column(name = "api_rate_limit")
     private Integer apiRateLimit;
 
-    // Activation and Expiration
-    @Column(name = "activated_at")
-    private Instant activatedAt;
+    // Multi-tenant Hierarchy
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "parent_tenant_id")
+    private Tenant parentTenant;
 
-    @Column(name = "expires_at")
-    private Instant expiresAt;
+    @OneToMany(mappedBy = "parentTenant", cascade = CascadeType.ALL)
+    private Set<Tenant> childTenants = new HashSet<>();
 
-    @Column(name = "trial_ends_at")
-    private Instant trialEndsAt;
+    // Related Entities
+    @OneToOne(mappedBy = "tenant", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    private Subscription subscription;
 
-    @Column(name = "suspended_at")
-    private Instant suspendedAt;
+    @OneToOne(mappedBy = "tenant", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    private TenantSettings settings;
 
-    @Column(name = "suspension_reason", columnDefinition = "TEXT")
-    private String suspensionReason;
+    @OneToMany(mappedBy = "tenant", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    private Set<FeatureFlag> featureFlags = new HashSet<>();
 
-    // Metadata
-    @Column(name = "logo_url", length = 500)
-    private String logoUrl;
-
-    @Column(name = "primary_color", length = 7)
-    private String primaryColor;
-
-    @Column(name = "secondary_color", length = 7)
-    private String secondaryColor;
-
-    @Column(name = "timezone", length = 50)
-    private String timezone = "UTC";
-
-    @Column(name = "locale", length = 10)
-    private String locale = "en_US";
-
-    @Column(name = "tags", columnDefinition = "TEXT")
-    private String tags; // Comma-separated tags for categorization
-
-    // Provisioning Information
-    @Column(name = "provisioned_at")
-    private Instant provisionedAt;
-
-    @Column(name = "provisioned_by")
-    private String provisionedBy;
-
-    @Column(name = "deprovisioned_at")
-    private Instant deprovisionedAt;
-
-    @Column(name = "migrated_at")
-    private Instant migratedAt;
-
-    @Column(name = "last_provisioning_error")
-    private String lastProvisioningError;
-
-    @Column(name = "provisioning_retry_count")
-    private Integer provisioningRetryCount = 0;
-
-    // Database credentials (encrypted)
-    @Column(name = "database_username")
-    private String databaseUsername;
-
-    @Column(name = "encrypted_database_password")
-    private String encryptedDatabasePassword;
-
-    @Column(name = "subscription_plan")
-    private String subscriptionPlan;
-
-    @Column(name = "current_users")
-    private Integer currentUsers;
-
-    @Column(name = "next_billing_date")
-    private Instant nextBillingDate;
-
-    // Helper Methods
-
-    /**
-     * Checks if the tenant is currently active and can be used.
-     */
-    public boolean isActive() {
-        return status == TenantStatus.ACTIVE || status == TenantStatus.TRIAL;
-    }
-
-    /**
-     * Checks if the tenant is in trial period.
-     */
-    public boolean isInTrial() {
-        return status == TenantStatus.TRIAL &&
-                trialEndsAt != null &&
-                trialEndsAt.isAfter(Instant.now());
-    }
-
-    /**
-     * Checks if the tenant requires high compliance.
-     */
-    public boolean requiresHighCompliance() {
-        return organizationType.isRequiresHighCompliance() ||
-                !complianceFrameworks.isEmpty();
-    }
-
-    /**
-     * Adds a compliance framework to the tenant.
-     */
-    public void addComplianceFramework(ComplianceFramework framework) {
-        if (complianceFrameworks == null) {
-            complianceFrameworks = new HashSet<>();
+    @PrePersist
+    @Override
+    protected void onCreate() {
+        super.onCreate();
+        if (status == null) {
+            status = TenantStatus.PENDING;
         }
-        complianceFrameworks.add(framework);
+        if (isVerified == null) {
+            isVerified = false;
+        }
     }
 
-    /**
-     * Activates the tenant.
-     */
+    // Business methods
     public void activate() {
         this.status = TenantStatus.ACTIVE;
-        this.activatedAt = Instant.now();
+        this.activatedAt = LocalDateTime.now();
     }
 
-    /**
-     * Suspends the tenant with a reason.
-     */
     public void suspend(String reason) {
         this.status = TenantStatus.SUSPENDED;
-        this.suspendedAt = Instant.now();
+        this.suspendedAt = LocalDateTime.now();
         this.suspensionReason = reason;
+    }
+
+    public void reactivate() {
+        this.status = TenantStatus.ACTIVE;
+        this.suspendedAt = null;
+        this.suspensionReason = null;
+    }
+
+    public boolean isActive() {
+        return TenantStatus.ACTIVE.equals(status);
+    }
+
+    public boolean isTrial() {
+        return TenantStatus.TRIAL.equals(status) &&
+                (trialEndsAt == null || trialEndsAt.isAfter(LocalDateTime.now()));
     }
 }

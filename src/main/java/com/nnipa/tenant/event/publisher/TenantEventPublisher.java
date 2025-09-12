@@ -1,26 +1,31 @@
-// Complete TenantEventPublisher.java
 package com.nnipa.tenant.event.publisher;
 
 import com.google.protobuf.Timestamp;
 import com.nnipa.proto.common.EventMetadata;
+import com.nnipa.proto.common.Priority;
 import com.nnipa.proto.tenant.*;
-import com.nnipa.proto.billing.PaymentFailedEvent;
+import com.nnipa.tenant.entity.FeatureFlag;
+import com.nnipa.tenant.entity.Subscription;
 import com.nnipa.tenant.entity.Tenant;
-import com.nnipa.tenant.entity.TenantSettings;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 /**
- * Publishes tenant-related events to Kafka topics using Protobuf serialization.
- * All events use byte[] serialization for Protobuf messages.
+ * Publisher for tenant-related events
+ * Handles all outgoing events for tenant lifecycle, subscription changes, and feature flag updates
  */
 @Slf4j
 @Component
@@ -29,450 +34,467 @@ public class TenantEventPublisher {
 
     private final KafkaTemplate<String, byte[]> kafkaTemplate;
 
-    @Value("${spring.kafka.topics.tenant-created:nnipa.events.tenant.created}")
+    @Value("${spring.application.name}")
+    private String applicationName;
+
+    @Value("${kafka.topics.tenant-created}")
     private String tenantCreatedTopic;
 
-    @Value("${spring.kafka.topics.tenant-updated:nnipa.events.tenant.updated}")
+    @Value("${kafka.topics.tenant-updated}")
     private String tenantUpdatedTopic;
 
-    @Value("${spring.kafka.topics.tenant-deactivated:nnipa.events.tenant.deactivated}")
-    private String tenantDeactivatedTopic;
+    @Value("${kafka.topics.tenant-activated}")
+    private String tenantActivatedTopic;
 
-    @Value("${spring.kafka.topics.tenant-migrated:nnipa.events.tenant.migrated}")
-    private String tenantMigratedTopic;
-
-    @Value("${spring.kafka.topics.tenant-subscription-changed:nnipa.events.tenant.subscription-changed}")
-    private String subscriptionChangedTopic;
-
-    @Value("${spring.kafka.topics.tenant-suspended:nnipa.events.tenant.suspended}")
+    @Value("${kafka.topics.tenant-suspended}")
     private String tenantSuspendedTopic;
 
-    @Value("${spring.kafka.topics.tenant-reactivated:nnipa.events.tenant.reactivated}")
+    @Value("${kafka.topics.tenant-reactivated}")
     private String tenantReactivatedTopic;
 
-    @Value("${spring.kafka.topics.tenant-limit-exceeded:nnipa.events.tenant.limit-exceeded}")
-    private String tenantLimitExceededTopic;
+    @Value("${kafka.topics.tenant-deleted}")
+    private String tenantDeletedTopic;
 
-    @Value("${spring.kafka.topics.payment-failed:nnipa.events.billing.payment-failed}")
-    private String paymentFailedTopic;
+    @Value("${kafka.topics.subscription-created}")
+    private String subscriptionCreatedTopic;
 
-    @Value("${spring.application.name:tenant-management-service}")
-    private String serviceName;
+    @Value("${kafka.topics.subscription-changed}")
+    private String subscriptionChangedTopic;
+
+    @Value("${kafka.topics.subscription-cancelled}")
+    private String subscriptionCancelledTopic;
+
+    @Value("${kafka.topics.subscription-renewed}")
+    private String subscriptionRenewedTopic;
+
+    @Value("${kafka.topics.billing-failed}")
+    private String billingFailedTopic;
+
+    @Value("${kafka.topics.feature-enabled}")
+    private String featureEnabledTopic;
+
+    @Value("${kafka.topics.feature-disabled}")
+    private String featureDisabledTopic;
+
+    @Value("${kafka.topics.feature-updated}")
+    private String featureUpdatedTopic;
 
     /**
-     * Publish tenant created event.
+     * Publish tenant created event
      */
+    @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
     public void publishTenantCreatedEvent(Tenant tenant) {
+        log.info("Publishing tenant created event for tenant: {}", tenant.getTenantCode());
+
         try {
             TenantCreatedEvent event = TenantCreatedEvent.newBuilder()
-                    .setMetadata(createEventMetadata())
+                    .setMetadata(createEventMetadata(tenant.getId().toString(), tenant.getCreatedBy()))
                     .setTenant(buildTenantData(tenant))
                     .build();
 
-            String key = tenant.getId().toString();
-            byte[] value = event.toByteArray();
+            publishEvent(tenantCreatedTopic, tenant.getId().toString(), event.toByteArray());
 
-            kafkaTemplate.send(tenantCreatedTopic, key, value)
-                    .whenComplete((result, ex) -> {
-                        if (ex != null) {
-                            log.error("Failed to publish tenant created event for tenant: {}",
-                                    tenant.getId(), ex);
-                        } else {
-                            log.info("Published tenant created event for tenant: {} to partition: {} at offset: {}",
-                                    tenant.getId(),
-                                    result.getRecordMetadata().partition(),
-                                    result.getRecordMetadata().offset());
-                        }
-                    });
-
+            log.info("Successfully published tenant created event for: {}", tenant.getTenantCode());
         } catch (Exception e) {
-            log.error("Error publishing tenant created event", e);
+            log.error("Failed to publish tenant created event for: {}", tenant.getTenantCode(), e);
+            throw e;
         }
     }
 
     /**
-     * Publish tenant updated event.
+     * Publish tenant updated event
      */
+    @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
     public void publishTenantUpdatedEvent(Tenant tenant) {
+        log.info("Publishing tenant updated event for tenant: {}", tenant.getTenantCode());
+
         try {
             TenantUpdatedEvent event = TenantUpdatedEvent.newBuilder()
-                    .setMetadata(createEventMetadata())
+                    .setMetadata(createEventMetadata(tenant.getId().toString(), tenant.getUpdatedBy()))
                     .setTenant(buildTenantData(tenant))
-                    .setUpdatedAt(Timestamp.newBuilder()
-                            .setSeconds(Instant.now().getEpochSecond())
-                            .build())
+                    .setUpdatedAt(toTimestamp(tenant.getUpdatedAt()))
+                    .setUpdatedBy(tenant.getUpdatedBy() != null ? tenant.getUpdatedBy() : "system")
                     .build();
 
-            String key = tenant.getId().toString();
-            byte[] value = event.toByteArray();
+            publishEvent(tenantUpdatedTopic, tenant.getId().toString(), event.toByteArray());
 
-            kafkaTemplate.send(tenantUpdatedTopic, key, value)
-                    .whenComplete((result, ex) -> {
-                        if (ex != null) {
-                            log.error("Failed to publish tenant updated event", ex);
-                        } else {
-                            log.debug("Published tenant updated event for tenant: {}", tenant.getId());
-                        }
-                    });
-
+            log.info("Successfully published tenant updated event for: {}", tenant.getTenantCode());
         } catch (Exception e) {
-            log.error("Error publishing tenant updated event", e);
+            log.error("Failed to publish tenant updated event for: {}", tenant.getTenantCode(), e);
+            throw e;
         }
     }
 
     /**
-     * Publish tenant deactivated event.
+     * Publish tenant activated event
      */
-    public void publishTenantDeactivatedEvent(Tenant tenant) {
+    @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
+    public void publishTenantActivatedEvent(Tenant tenant, String activatedBy) {
+        log.info("Publishing tenant activated event for tenant: {}", tenant.getTenantCode());
+
         try {
-            TenantDeactivatedEvent event = TenantDeactivatedEvent.newBuilder()
-                    .setMetadata(createEventMetadata())
+            TenantActivatedEvent event = TenantActivatedEvent.newBuilder()
+                    .setMetadata(createEventMetadata(tenant.getId().toString(), activatedBy))
                     .setTenantId(tenant.getId().toString())
                     .setTenantCode(tenant.getTenantCode())
-                    .setReason("Tenant deactivation requested")
-                    .setDeactivatedAt(Timestamp.newBuilder()
-                            .setSeconds(Instant.now().getEpochSecond())
-                            .build())
+                    .setActivatedBy(activatedBy != null ? activatedBy : "system")
+                    .setActivatedAt(toTimestamp(tenant.getActivatedAt()))
                     .build();
 
-            String key = tenant.getId().toString();
-            byte[] value = event.toByteArray();
+            publishEvent(tenantActivatedTopic, tenant.getId().toString(), event.toByteArray());
 
-            kafkaTemplate.send(tenantDeactivatedTopic, key, value)
-                    .whenComplete((result, ex) -> {
-                        if (ex != null) {
-                            log.error("Failed to publish tenant deactivated event", ex);
-                        } else {
-                            log.info("Published tenant deactivated event for tenant: {}", tenant.getId());
-                        }
-                    });
-
+            log.info("Successfully published tenant activated event for: {}", tenant.getTenantCode());
         } catch (Exception e) {
-            log.error("Error publishing tenant deactivated event", e);
+            log.error("Failed to publish tenant activated event for: {}", tenant.getTenantCode(), e);
+            throw e;
         }
     }
 
     /**
-     * Publish tenant migrated event.
+     * Publish tenant suspended event
      */
-    public void publishTenantMigratedEvent(Tenant tenant, String fromStrategy, String toStrategy) {
-        try {
-            TenantMigratedEvent event = TenantMigratedEvent.newBuilder()
-                    .setMetadata(createEventMetadata())
-                    .setMigration(TenantMigratedEvent.MigrationData.newBuilder()
-                            .setTenantId(tenant.getId().toString())
-                            .setFromStrategy(fromStrategy)
-                            .setToStrategy(toStrategy)
-                            .setStartedAt(Timestamp.newBuilder()
-                                    .setSeconds(Instant.now().getEpochSecond())
-                                    .build())
-                            .setStatus("INITIATED")
-                            .build())
-                    .build();
-
-            String key = tenant.getId().toString();
-            byte[] value = event.toByteArray();
-
-            kafkaTemplate.send(tenantMigratedTopic, key, value)
-                    .whenComplete((result, ex) -> {
-                        if (ex != null) {
-                            log.error("Failed to publish tenant migrated event", ex);
-                        } else {
-                            log.info("Published tenant migrated event for tenant: {}", tenant.getId());
-                        }
-                    });
-
-        } catch (Exception e) {
-            log.error("Error publishing tenant migrated event", e);
-        }
-    }
-
-    /**
-     * Publish subscription changed event.
-     */
-    public void publishSubscriptionChangedEvent(Tenant tenant, String oldPlan, String newPlan) {
-        try {
-            TenantSubscriptionChangedEvent.Builder eventBuilder = TenantSubscriptionChangedEvent.newBuilder()
-                    .setMetadata(createEventMetadata());
-
-            TenantSubscriptionChangedEvent.SubscriptionData.Builder dataBuilder =
-                    TenantSubscriptionChangedEvent.SubscriptionData.newBuilder()
-                            .setTenantId(tenant.getId().toString())
-                            .setOldPlan(oldPlan != null ? oldPlan : "")
-                            .setNewPlan(newPlan != null ? newPlan : "")
-                            .setChangedAt(Timestamp.newBuilder()
-                                    .setSeconds(Instant.now().getEpochSecond())
-                                    .build());
-
-            if (tenant.getNextBillingDate() != null) {
-                dataBuilder.setNextBillingDate(Timestamp.newBuilder()
-                        .setSeconds(tenant.getNextBillingDate().getEpochSecond())
-                        .build());
-            }
-
-            eventBuilder.setSubscriptionData(dataBuilder.build());
-            TenantSubscriptionChangedEvent event = eventBuilder.build();
-
-            String key = tenant.getId().toString();
-            byte[] value = event.toByteArray();
-
-            kafkaTemplate.send(subscriptionChangedTopic, key, value)
-                    .whenComplete((result, ex) -> {
-                        if (ex != null) {
-                            log.error("Failed to publish subscription changed event", ex);
-                        } else {
-                            log.info("Published subscription changed event for tenant: {}", tenant.getId());
-                        }
-                    });
-
-        } catch (Exception e) {
-            log.error("Error publishing subscription changed event", e);
-        }
-    }
-
-    /**
-     * Publish tenant suspended event.
-     */
+    @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
     public void publishTenantSuspendedEvent(Tenant tenant, String reason) {
+        log.info("Publishing tenant suspended event for tenant: {}", tenant.getTenantCode());
+
         try {
             TenantSuspendedEvent event = TenantSuspendedEvent.newBuilder()
-                    .setMetadata(createEventMetadata())
+                    .setMetadata(createEventMetadata(tenant.getId().toString(), tenant.getUpdatedBy()))
                     .setTenantId(tenant.getId().toString())
-                    .setReason(reason != null ? reason : "Administrative action")
-                    .setSuspendedAt(Timestamp.newBuilder()
-                            .setSeconds(Instant.now().getEpochSecond())
-                            .build())
+                    .setTenantCode(tenant.getTenantCode())
+                    .setReason(reason != null ? reason : "Suspension requested")
+                    .setSuspendedAt(toTimestamp(tenant.getSuspendedAt()))
+                    .setSuspendedBy(tenant.getUpdatedBy() != null ? tenant.getUpdatedBy() : "system")
                     .build();
 
-            String key = tenant.getId().toString();
-            byte[] value = event.toByteArray();
+            publishEvent(tenantSuspendedTopic, tenant.getId().toString(), event.toByteArray());
 
-            kafkaTemplate.send(tenantSuspendedTopic, key, value)
-                    .whenComplete((result, ex) -> {
-                        if (ex != null) {
-                            log.error("Failed to publish tenant suspended event", ex);
-                        } else {
-                            log.info("Published tenant suspended event for tenant: {} - reason: {}",
-                                    tenant.getId(), reason);
-                        }
-                    });
-
+            log.info("Successfully published tenant suspended event for: {}", tenant.getTenantCode());
         } catch (Exception e) {
-            log.error("Error publishing tenant suspended event", e);
+            log.error("Failed to publish tenant suspended event for: {}", tenant.getTenantCode(), e);
+            throw e;
         }
     }
 
     /**
-     * Publish tenant reactivated event.
+     * Publish tenant reactivated event
      */
+    @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
     public void publishTenantReactivatedEvent(Tenant tenant, String reactivatedBy) {
+        log.info("Publishing tenant reactivated event for tenant: {}", tenant.getTenantCode());
+
         try {
             TenantReactivatedEvent event = TenantReactivatedEvent.newBuilder()
-                    .setMetadata(createEventMetadata())
+                    .setMetadata(createEventMetadata(tenant.getId().toString(), reactivatedBy))
                     .setTenantId(tenant.getId().toString())
-                    .setReactivatedAt(Timestamp.newBuilder()
-                            .setSeconds(Instant.now().getEpochSecond())
-                            .build())
+                    .setReactivatedAt(toTimestamp(LocalDateTime.now()))
                     .setReactivatedBy(reactivatedBy != null ? reactivatedBy : "system")
                     .build();
 
-            String key = tenant.getId().toString();
-            byte[] value = event.toByteArray();
+            publishEvent(tenantReactivatedTopic, tenant.getId().toString(), event.toByteArray());
 
-            kafkaTemplate.send(tenantReactivatedTopic, key, value)
-                    .whenComplete((result, ex) -> {
-                        if (ex != null) {
-                            log.error("Failed to publish tenant reactivated event", ex);
-                        } else {
-                            log.info("Published tenant reactivated event for tenant: {} by: {}",
-                                    tenant.getId(), reactivatedBy);
-                        }
-                    });
-
+            log.info("Successfully published tenant reactivated event for: {}", tenant.getTenantCode());
         } catch (Exception e) {
-            log.error("Error publishing tenant reactivated event", e);
+            log.error("Failed to publish tenant reactivated event for: {}", tenant.getTenantCode(), e);
+            throw e;
         }
     }
 
     /**
-     * Publish user limit exceeded event.
+     * Publish tenant deleted event
      */
-    public void publishUserLimitExceededEvent(Tenant tenant) {
+    @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
+    public void publishTenantDeletedEvent(Tenant tenant, String deletedBy) {
+        log.info("Publishing tenant deleted event for tenant: {}", tenant.getTenantCode());
+
         try {
-            Map<String, String> eventData = new HashMap<>();
-            eventData.put("tenantId", tenant.getId().toString());
-            eventData.put("tenantName", tenant.getName());
-            eventData.put("currentUsers", String.valueOf(tenant.getCurrentUsers() != null ? tenant.getCurrentUsers() : 0));
-            eventData.put("maxUsers", String.valueOf(tenant.getMaxUsers() != null ? tenant.getMaxUsers() : 0));
-            eventData.put("subscriptionPlan", tenant.getSubscriptionPlan() != null ? tenant.getSubscriptionPlan() : "UNKNOWN");
-
-            TenantUpdatedEvent event = TenantUpdatedEvent.newBuilder()
-                    .setMetadata(EventMetadata.newBuilder()
-                            .setEventId(UUID.randomUUID().toString())
-                            .setTimestamp(Timestamp.newBuilder()
-                                    .setSeconds(Instant.now().getEpochSecond())
-                                    .build())
-                            .setSourceService(serviceName)
-                            .setVersion("1.0")
-                            .setCorrelationId(UUID.randomUUID().toString())
-                            .putHeaders("event_type", "USER_LIMIT_EXCEEDED")
-                            .putHeaders("current_users", eventData.get("currentUsers"))
-                            .putHeaders("max_users", eventData.get("maxUsers"))
-                            .putHeaders("alert_level", "WARNING")
-                            .build())
-                    .setTenant(buildTenantData(tenant))
-                    .setUpdatedAt(Timestamp.newBuilder()
-                            .setSeconds(Instant.now().getEpochSecond())
-                            .build())
-                    .addChangedFields("currentUsers")
-                    .build();
-
-            String key = tenant.getId().toString();
-            byte[] value = event.toByteArray();
-
-            kafkaTemplate.send(tenantLimitExceededTopic, key, value)
-                    .whenComplete((result, ex) -> {
-                        if (ex != null) {
-                            log.error("Failed to publish user limit exceeded event", ex);
-                        } else {
-                            log.warn("Published user limit exceeded event for tenant: {} (users: {}/{})",
-                                    tenant.getId(),
-                                    tenant.getCurrentUsers(),
-                                    tenant.getMaxUsers());
-                        }
-                    });
-
-        } catch (Exception e) {
-            log.error("Error publishing user limit exceeded event", e);
-        }
-    }
-
-    /**
-     * Publish payment failed event.
-     */
-    public void publishPaymentFailedEvent(Tenant tenant, int failedCount) {
-        try {
-            PaymentFailedEvent event = PaymentFailedEvent.newBuilder()
-                    .setMetadata(createEventMetadata())
+            TenantDeletedEvent event = TenantDeletedEvent.newBuilder()
+                    .setMetadata(createEventMetadata(tenant.getId().toString(), deletedBy))
                     .setTenantId(tenant.getId().toString())
-                    .setTenantName(tenant.getName())
-                    .setSubscriptionPlan(tenant.getSubscriptionPlan() != null ?
-                            tenant.getSubscriptionPlan() : "UNKNOWN")
-                    .setFailedAttemptCount(failedCount)
-                    .setFailureReason("Payment processing failed")
-                    .setFailedAt(Timestamp.newBuilder()
-                            .setSeconds(Instant.now().getEpochSecond())
+                    .setTenantCode(tenant.getTenantCode())
+                    .setDeletedBy(deletedBy != null ? deletedBy : "system")
+                    .setDeletedAt(toTimestamp(tenant.getDeletedAt()))
+                    .setPermanent(true)
+                    .build();
+
+            publishEvent(tenantDeletedTopic, tenant.getId().toString(), event.toByteArray());
+
+            log.info("Successfully published tenant deleted event for: {}", tenant.getTenantCode());
+        } catch (Exception e) {
+            log.error("Failed to publish tenant deleted event for: {}", tenant.getTenantCode(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * Publish subscription created event
+     */
+    @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
+    public void publishSubscriptionCreatedEvent(Subscription subscription) {
+        log.info("Publishing subscription created event for subscription: {}", subscription.getId());
+
+        try {
+            SubscriptionCreatedEvent event = SubscriptionCreatedEvent.newBuilder()
+                    .setMetadata(createEventMetadata(subscription.getTenant().getId().toString(), subscription.getCreatedBy()))
+                    .setSubscription(buildSubscriptionData(subscription))
+                    .build();
+
+            publishEvent(subscriptionCreatedTopic, subscription.getTenant().getId().toString(), event.toByteArray());
+
+            log.info("Successfully published subscription created event for tenant: {}", subscription.getTenant().getId());
+        } catch (Exception e) {
+            log.error("Failed to publish subscription created event", e);
+            throw e;
+        }
+    }
+
+    /**
+     * Publish subscription changed event
+     */
+    @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
+    public void publishSubscriptionChangedEvent(Subscription subscription, String oldPlan, String changedBy) {
+        log.info("Publishing subscription changed event for subscription: {}", subscription.getId());
+
+        try {
+            TenantSubscriptionChangedEvent event = TenantSubscriptionChangedEvent.newBuilder()
+                    .setMetadata(createEventMetadata(subscription.getTenant().getId().toString(), changedBy))
+                    .setSubscriptionData(TenantSubscriptionChangedEvent.SubscriptionData.newBuilder()
+                            .setTenantId(subscription.getTenant().getId().toString())
+                            .setOldPlan(oldPlan)
+                            .setNewPlan(subscription.getPlan().name())
+                            .setChangedAt(toTimestamp(LocalDateTime.now()))
+                            .setEffectiveDate(toTimestamp(subscription.getStartDate()))
+                            .setNextBillingDate(toTimestamp(subscription.getNextRenewalDate()))
+                            .setChangedBy(changedBy != null ? changedBy : "system")
+                            .setChangeReason("Plan update requested")
                             .build())
                     .build();
 
-            String key = tenant.getId().toString();
-            byte[] value = event.toByteArray();
+            publishEvent(subscriptionChangedTopic, subscription.getTenant().getId().toString(), event.toByteArray());
 
-            kafkaTemplate.send(paymentFailedTopic, key, value)
-                    .whenComplete((result, ex) -> {
-                        if (ex != null) {
-                            log.error("Failed to publish payment failed event", ex);
-                        } else {
-                            log.warn("Published payment failed event for tenant: {} (attempt: {})",
-                                    tenant.getId(), failedCount);
-                        }
-                    });
-
+            log.info("Successfully published subscription changed event for tenant: {}", subscription.getTenant().getId());
         } catch (Exception e) {
-            log.error("Error publishing payment failed event", e);
+            log.error("Failed to publish subscription changed event", e);
+            throw e;
         }
     }
 
     /**
-     * Create common event metadata.
+     * Publish subscription cancelled event
      */
-    private EventMetadata createEventMetadata() {
-        return EventMetadata.newBuilder()
-                .setEventId(UUID.randomUUID().toString())
-                .setTimestamp(Timestamp.newBuilder()
-                        .setSeconds(Instant.now().getEpochSecond())
-                        .build())
-                .setSourceService(serviceName)
-                .setVersion("1.0")
-                .setCorrelationId(UUID.randomUUID().toString())
-                .build();
+    @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
+    public void publishSubscriptionCancelledEvent(Subscription subscription, String reason) {
+        log.info("Publishing subscription cancelled event for subscription: {}", subscription.getId());
+
+        try {
+            SubscriptionCancelledEvent event = SubscriptionCancelledEvent.newBuilder()
+                    .setMetadata(createEventMetadata(subscription.getTenant().getId().toString(), subscription.getUpdatedBy()))
+                    .setSubscriptionId(subscription.getId().toString())
+                    .setTenantId(subscription.getTenant().getId().toString())
+                    .setPlan(subscription.getPlan().name())
+                    .setReason(reason != null ? reason : "Subscription cancelled")
+                    .setCancelledAt(toTimestamp(LocalDateTime.now()))
+                    .setEffectiveDate(toTimestamp(subscription.getEndDate()))
+                    .build();
+
+            publishEvent(subscriptionCancelledTopic, subscription.getTenant().getId().toString(), event.toByteArray());
+
+            log.info("Successfully published subscription cancelled event for tenant: {}", subscription.getTenant().getId());
+        } catch (Exception e) {
+            log.error("Failed to publish subscription cancelled event", e);
+            throw e;
+        }
     }
 
     /**
-     * Build tenant data for events.
+     * Publish feature enabled event
      */
-    private TenantCreatedEvent.TenantData buildTenantData(Tenant tenant) {
-        TenantCreatedEvent.TenantData.Builder builder = TenantCreatedEvent.TenantData.newBuilder()
+    @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
+    public void publishFeatureEnabledEvent(FeatureFlag feature) {
+        log.info("Publishing feature enabled event for feature: {} in tenant: {}",
+                feature.getFeatureCode(), feature.getTenant().getId());
+
+        try {
+            FeatureEnabledEvent event = FeatureEnabledEvent.newBuilder()
+                    .setMetadata(createEventMetadata(feature.getTenant().getId().toString(), feature.getUpdatedBy()))
+                    .setTenantId(feature.getTenant().getId().toString())
+                    .setFeatureCode(feature.getFeatureCode())
+                    .setFeatureName(feature.getFeatureName())
+                    .setCategory(feature.getCategory() != null ? feature.getCategory().name() : "")
+                    .setEnabledAt(toTimestamp(feature.getLastEnabledAt() != null ?
+                            feature.getLastEnabledAt() : LocalDateTime.now()))
+                    .setTrialEnabled(false)
+                    .setTrialDays(0)
+                    .build();
+
+            publishEvent(featureEnabledTopic, feature.getTenant().getId().toString(), event.toByteArray());
+
+            log.info("Successfully published feature enabled event for: {}", feature.getFeatureCode());
+        } catch (Exception e) {
+            log.error("Failed to publish feature enabled event for: {}", feature.getFeatureCode(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * Publish feature disabled event
+     */
+    @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
+    public void publishFeatureDisabledEvent(FeatureFlag feature) {
+        log.info("Publishing feature disabled event for feature: {} in tenant: {}",
+                feature.getFeatureCode(), feature.getTenant().getId());
+
+        try {
+            FeatureDisabledEvent event = FeatureDisabledEvent.newBuilder()
+                    .setMetadata(createEventMetadata(feature.getTenant().getId().toString(), feature.getUpdatedBy()))
+                    .setTenantId(feature.getTenant().getId().toString())
+                    .setFeatureCode(feature.getFeatureCode())
+                    .setReason("Feature disabled")
+                    .setDisabledAt(toTimestamp(LocalDateTime.now()))
+                    .build();
+
+            publishEvent(featureDisabledTopic, feature.getTenant().getId().toString(), event.toByteArray());
+
+            log.info("Successfully published feature disabled event for: {}", feature.getFeatureCode());
+        } catch (Exception e) {
+            log.error("Failed to publish feature disabled event for: {}", feature.getFeatureCode(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * Build tenant data for events
+     */
+    private TenantData buildTenantData(Tenant tenant) {
+        TenantData.Builder builder = TenantData.newBuilder()
                 .setTenantId(tenant.getId().toString())
-                .setTenantCode(tenant.getTenantCode() != null ? tenant.getTenantCode() : "")
-                .setName(tenant.getName() != null ? tenant.getName() : "")
-                .setStatus(tenant.getStatus() != null ? tenant.getStatus().name() : "UNKNOWN");
+                .setTenantCode(tenant.getTenantCode())
+                .setName(tenant.getName())
+                .setOrganizationType(tenant.getOrganizationType().name())
+                .setStatus(tenant.getStatus().name())
+                .setCreatedAt(toTimestamp(tenant.getCreatedAt()));
 
-        if (tenant.getOrganizationType() != null) {
-            builder.setOrganizationType(tenant.getOrganizationType().name());
+        // Add optional fields
+        if (tenant.getDisplayName() != null) {
+            builder.setDisplayName(tenant.getDisplayName());
         }
-
-        if (tenant.getSubscriptionPlan() != null) {
-            builder.setSubscriptionPlan(tenant.getSubscriptionPlan());
+        if (tenant.getOrganizationEmail() != null) {
+            builder.setOrganizationEmail(tenant.getOrganizationEmail());
         }
-
+        if (tenant.getCountry() != null) {
+            builder.setCountry(tenant.getCountry());
+        }
         if (tenant.getIsolationStrategy() != null) {
             builder.setIsolationStrategy(tenant.getIsolationStrategy().name());
         }
-
-        if (tenant.getCreatedAt() != null) {
-            builder.setCreatedAt(Timestamp.newBuilder()
-                    .setSeconds(tenant.getCreatedAt().getEpochSecond())
-                    .build());
-        }
-
         if (tenant.getMaxUsers() != null) {
             builder.setMaxUsers(tenant.getMaxUsers());
         }
-
-        // Convert Map<String, Object> to Map<String, String> for Protobuf
-        if (tenant.getMetadata() != null) {
-            Map<String, String> stringMetadata = new HashMap<>();
-            tenant.getMetadata().forEach((key, value) ->
-                    stringMetadata.put(key, value != null ? value.toString() : ""));
-            builder.putAllMetadata(stringMetadata);
-        }
-
-        // Convert TenantSettings individual properties to Map<String, String>
-        if (tenant.getSettings() != null) {
-            Map<String, String> settingsMap = convertTenantSettingsToMap(tenant.getSettings());
-            builder.putAllSettings(settingsMap);
-        }
-
-        // Feature flags
-        if (tenant.getFeatureFlags() != null) {
-            tenant.getFeatureFlags().forEach(builder::putFeatureFlags);
+        if (tenant.getStorageQuotaGb() != null) {
+            builder.setStorageQuotaGb(tenant.getStorageQuotaGb());
         }
 
         return builder.build();
     }
 
-    private Map<String, String> convertTenantSettingsToMap(TenantSettings settings) {
-        Map<String, String> settingsMap = new HashMap<>();
+    /**
+     * Build subscription data for events
+     */
+    private SubscriptionData buildSubscriptionData(Subscription subscription) {
+        SubscriptionData.Builder builder = SubscriptionData.newBuilder()
+                .setSubscriptionId(subscription.getId().toString())
+                .setTenantId(subscription.getTenant().getId().toString())
+                .setPlan(subscription.getPlan().name())
+                .setStatus(subscription.getSubscriptionStatus().name())
+                .setStartDate(toTimestamp(subscription.getStartDate()));
 
-        // Add individual settings
-        if (settings.getDefaultLanguage() != null) {
-            settingsMap.put("defaultLanguage", settings.getDefaultLanguage());
+        // Add optional fields
+        if (subscription.getEndDate() != null) {
+            builder.setEndDate(toTimestamp(subscription.getEndDate()));
         }
-        if (settings.getDateFormat() != null) {
-            settingsMap.put("dateFormat", settings.getDateFormat());
+        if (subscription.getMonthlyPrice() != null) {
+            builder.setMonthlyPrice(subscription.getMonthlyPrice().doubleValue());
         }
-        if (settings.getTimeFormat() != null) {
-            settingsMap.put("timeFormat", settings.getTimeFormat());
+        if (subscription.getCurrency() != null) {
+            builder.setCurrency(subscription.getCurrency());
         }
-        if (settings.getTimezone() != null) {
-            settingsMap.put("timezone", settings.getTimezone());
+        if (subscription.getBillingCycle() != null) {
+            builder.setBillingCycle(subscription.getBillingCycle().name());
         }
-        if (settings.getTheme() != null) {
-            settingsMap.put("theme", settings.getTheme());
+        if (subscription.getNextRenewalDate() != null) {
+            builder.setNextRenewalDate(toTimestamp(subscription.getNextRenewalDate()));
         }
-        // Add other relevant settings as needed
+        builder.setAutoRenew(subscription.getAutoRenew() != null ? subscription.getAutoRenew() : false);
 
-        return settingsMap;
+        return builder.build();
+    }
+
+    /**
+     * Generic method to publish events
+     */
+    private void publishEvent(String topic, String key, byte[] eventData) {
+        CompletableFuture<SendResult<String, byte[]>> future =
+                kafkaTemplate.send(topic, key, eventData);
+
+        future.whenComplete((result, ex) -> {
+            if (ex == null) {
+                log.debug("Event published successfully to topic: {}, key: {}, partition: {}, offset: {}",
+                        topic, key,
+                        result.getRecordMetadata().partition(),
+                        result.getRecordMetadata().offset());
+            } else {
+                log.error("Failed to publish event to topic: {}, key: {}", topic, key, ex);
+                throw new RuntimeException("Failed to publish event", ex);
+            }
+        });
+    }
+
+    /**
+     * Create event metadata
+     */
+    private EventMetadata createEventMetadata(String tenantId, String userId) {
+        return EventMetadata.newBuilder()
+                .setEventId(UUID.randomUUID().toString())
+                .setCorrelationId(UUID.randomUUID().toString())
+                .setSourceService(applicationName)
+                .setTimestamp(toTimestamp(Instant.now()))
+                .setVersion("1.0")
+                .setTenantId(tenantId)
+                .setUserId(userId != null ? userId : "system")
+                .setPriority(Priority.PRIORITY_MEDIUM)
+                .setRetryCount(0)
+                .build();
+    }
+
+    /**
+     * Convert LocalDateTime to protobuf Timestamp
+     */
+    private Timestamp toTimestamp(LocalDateTime dateTime) {
+        if (dateTime == null) {
+            return toTimestamp(Instant.now());
+        }
+        Instant instant = dateTime.atZone(ZoneId.systemDefault()).toInstant();
+        return toTimestamp(instant);
+    }
+
+    /**
+     * Convert Instant to protobuf Timestamp
+     */
+    private Timestamp toTimestamp(Instant instant) {
+        return Timestamp.newBuilder()
+                .setSeconds(instant.getEpochSecond())
+                .setNanos(instant.getNano())
+                .build();
+    }
+
+    /**
+     * Fallback method for circuit breaker
+     */
+    public void handlePublishFailure(Exception ex) {
+        log.error("Circuit breaker activated - Failed to publish event", ex);
+        // In production, you might want to:
+        // 1. Send to a dead letter queue
+        // 2. Store in database for retry
+        // 3. Send alert to monitoring system
     }
 }

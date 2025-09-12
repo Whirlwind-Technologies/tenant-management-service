@@ -1,12 +1,7 @@
 package com.nnipa.tenant.config;
 
-import com.nnipa.tenant.entity.Tenant;
-import com.nnipa.tenant.enums.TenantIsolationStrategy;
-import com.nnipa.tenant.service.SchemaManagementService;
-import com.nnipa.tenant.service.TenantService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -14,98 +9,80 @@ import org.springframework.web.servlet.HandlerInterceptor;
 import org.springframework.web.servlet.ModelAndView;
 
 /**
- * Interceptor to extract and set tenant context for multi-tenant operations.
- * Authentication/authorization handled by separate services.
+ * Interceptor to extract and set tenant context from incoming requests
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class TenantInterceptor implements HandlerInterceptor {
 
-    private static final String TENANT_HEADER = "X-Tenant-ID";
+    private static final String TENANT_HEADER = "X-Tenant-Id";
     private static final String TENANT_CODE_HEADER = "X-Tenant-Code";
 
-    private final TenantService tenantService;
-    private final SchemaManagementService schemaService;
-
     @Override
-    public boolean preHandle(@NonNull HttpServletRequest request,
-                             @NonNull HttpServletResponse response,
-                             @NonNull Object handler) throws Exception {
+    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+        // Extract tenant information from request
+        String tenantId = extractTenantId(request);
+        String tenantCode = extractTenantCode(request);
 
-        String requestPath = request.getRequestURI();
-
-        // Skip tenant context for public endpoints
-        if (isPublicEndpoint(requestPath)) {
-            return true;
+        if (tenantId != null) {
+            log.debug("Setting tenant context - ID: {}, Code: {}", tenantId, tenantCode);
+            TenantContext.setCurrentTenant(tenantId);
+            TenantContext.setCurrentTenantCode(tenantCode);
         }
 
-        String tenantIdentifier = extractTenantId(request);
-
-        if (tenantIdentifier == null) {
-            log.debug("No tenant identifier found for path: {}", requestPath);
-            return true;
-        }
-
-        try {
-            Tenant tenant = tenantService.findByCodeOrId(tenantIdentifier);
-
-            if (tenant == null) {
-                log.warn("Tenant not found: {}", tenantIdentifier);
-                response.sendError(HttpServletResponse.SC_NOT_FOUND, "Tenant not found");
-                return false;
-            }
-
-            setupTenantContext(tenant);
-            configureTenantIsolation(tenant);
-
-            log.debug("Tenant context established for: {} ({})",
-                    tenant.getName(), tenant.getIsolationStrategy());
-
-            return true;
-
-        } catch (Exception e) {
-            log.error("Error setting up tenant context", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
-                    "Error establishing tenant context");
-            return false;
-        }
+        return true;
     }
 
     @Override
-    public void afterCompletion(@NonNull HttpServletRequest request,
-                                @NonNull HttpServletResponse response,
-                                @NonNull Object handler,
+    public void postHandle(HttpServletRequest request, HttpServletResponse response, Object handler,
+                           ModelAndView modelAndView) throws Exception {
+        // Nothing to do here
+    }
+
+    @Override
+    public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler,
                                 Exception ex) throws Exception {
+        // Clear tenant context after request completion
         TenantContext.clear();
-        schemaService.clearSchema();
-        log.debug("Tenant context cleared");
     }
 
+    /**
+     * Extract tenant ID from request
+     * Priority: Header > JWT Token > Subdomain > Path Parameter
+     */
     private String extractTenantId(HttpServletRequest request) {
-        // Check header
+        // 1. Check header
         String tenantId = request.getHeader(TENANT_HEADER);
-        if (tenantId != null) return tenantId;
+        if (tenantId != null && !tenantId.isEmpty()) {
+            return tenantId;
+        }
 
-        // Check tenant code header
-        String tenantCode = request.getHeader(TENANT_CODE_HEADER);
-        if (tenantCode != null) return tenantCode;
+        // 2. Check JWT token (if present)
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            // Extract tenant ID from JWT token
+            // This would need JWT parsing logic
+            // For now, we'll skip this
+        }
 
-        // Check subdomain
+        // 3. Check subdomain
         String serverName = request.getServerName();
         if (serverName != null && !serverName.startsWith("www.")) {
             String[] parts = serverName.split("\\.");
             if (parts.length > 2) {
+                // First part could be tenant code
                 return parts[0];
             }
         }
 
-        // Check path variable
+        // 4. Check path parameter
         String path = request.getRequestURI();
-        if (path.contains("/tenants/")) {
+        if (path != null && path.contains("/tenant/")) {
+            // Extract tenant ID from path
             String[] pathParts = path.split("/");
             for (int i = 0; i < pathParts.length - 1; i++) {
-                if ("tenants".equals(pathParts[i])) {
+                if ("tenant".equals(pathParts[i]) || "tenants".equals(pathParts[i])) {
                     return pathParts[i + 1];
                 }
             }
@@ -114,49 +91,10 @@ public class TenantInterceptor implements HandlerInterceptor {
         return null;
     }
 
-    private void setupTenantContext(Tenant tenant) {
-        TenantContext.setCurrentTenant(tenant.getId().toString());
-        TenantContext.setIsolationStrategy(tenant.getIsolationStrategy());
-        TenantContext.setTenantDatabase(tenant.getDatabaseName());
-        TenantContext.setTenantSchema(tenant.getSchemaName());
-
-        // Add organization type and subscription plan for business logic
-        if (tenant.getOrganizationType() != null) {
-            TenantContext.setOrganizationType(tenant.getOrganizationType());
-        }
-        if (tenant.getSubscription() != null) {
-            TenantContext.setSubscriptionPlan(tenant.getSubscription().getPlan());
-        }
-    }
-
-    private void configureTenantIsolation(Tenant tenant) {
-        TenantIsolationStrategy strategy = tenant.getIsolationStrategy();
-
-        switch (strategy) {
-            case DATABASE_PER_TENANT -> {
-                // Database routing handled by MultiTenantDataSourceConfig
-            }
-            case SCHEMA_PER_TENANT, HYBRID_POOL -> {
-                String schemaName = tenant.getSchemaName() != null ?
-                        tenant.getSchemaName() : "tenant_" + tenant.getId();
-                schemaService.setSchema(schemaName);
-            }
-            case SHARED_SCHEMA_ROW_LEVEL -> {
-                schemaService.setTenantIdForRLS(tenant.getId().toString());
-            }
-            default -> {
-                // SHARED_SCHEMA_BASIC - no special configuration needed
-            }
-        }
-    }
-
-    private boolean isPublicEndpoint(String path) {
-        return path.contains("/public/") ||
-                path.contains("/health") ||
-                path.contains("/actuator/") ||
-                path.contains("/swagger") ||
-                path.contains("/api-docs") ||
-                path.contains("/register") ||
-                path.contains("/tenant-management/");
+    /**
+     * Extract tenant code from request
+     */
+    private String extractTenantCode(HttpServletRequest request) {
+        return request.getHeader(TENANT_CODE_HEADER);
     }
 }

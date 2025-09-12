@@ -1,81 +1,58 @@
 package com.nnipa.tenant.dto.request;
 
-import io.swagger.v3.oas.annotations.media.Schema;
-import jakarta.validation.constraints.*;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
-import lombok.NoArgsConstructor;
-
+import lombok.NoArgsConstructor; /**
+ * Request DTO for updating tenant information
+ */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Schema(description = "Request for updating tenant information")
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class UpdateTenantRequest {
 
-    @Size(min = 2, max = 255)
-    @Schema(description = "Organization name")
+    @Size(max = 255)
     private String name;
 
     @Size(max = 255)
-    @Schema(description = "Display name")
     private String displayName;
 
-    @Size(max = 1000)
-    @Schema(description = "Description")
-    private String description;
-
-    @Email
-    @Schema(description = "Organization email")
+    @Email(message = "Invalid email format")
     private String organizationEmail;
 
-    @Pattern(regexp = "^\\+?[1-9]\\d{1,14}$")
-    @Schema(description = "Organization phone")
+    @Pattern(regexp = "^\\+?[1-9]\\d{1,14}$", message = "Invalid phone number format")
     private String organizationPhone;
 
-    @Pattern(regexp = "^https?://.*")
-    @Schema(description = "Organization website")
+    @Size(max = 500)
     private String organizationWebsite;
 
-    @Schema(description = "Address line 1")
+    // Address
     private String addressLine1;
-
-    @Schema(description = "Address line 2")
     private String addressLine2;
-
-    @Schema(description = "City")
     private String city;
-
-    @Schema(description = "State or province")
     private String stateProvince;
-
-    @Schema(description = "Postal code")
     private String postalCode;
 
     @Size(min = 2, max = 2)
-    @Pattern(regexp = "^[A-Z]{2}$")
-    @Schema(description = "Country code")
     private String country;
 
-    @Schema(description = "Logo URL")
-    private String logoUrl;
+    // Limits
+    @Min(1)
+    private Integer maxUsers;
 
-    @Pattern(regexp = "^#[0-9A-Fa-f]{6}$")
-    @Schema(description = "Primary color")
-    private String primaryColor;
+    @Min(1)
+    private Integer maxProjects;
 
-    @Pattern(regexp = "^#[0-9A-Fa-f]{6}$")
-    @Schema(description = "Secondary color")
-    private String secondaryColor;
+    @Min(1)
+    private Integer storageQuotaGb;
 
-    @Schema(description = "Timezone")
-    private String timezone;
-
-    @Pattern(regexp = "^[a-z]{2}_[A-Z]{2}$")
-    @Schema(description = "Locale")
-    private String locale;
-
-    @Schema(description = "Tags")
-    private String tags;
+    @Min(1)
+    private Integer apiRateLimit;
 }

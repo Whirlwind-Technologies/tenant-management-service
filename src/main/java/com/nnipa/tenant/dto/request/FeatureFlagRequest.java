@@ -1,42 +1,62 @@
 package com.nnipa.tenant.dto.request;
 
-import io.swagger.v3.oas.annotations.media.Schema;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.nnipa.tenant.enums.FeatureCategory;
 import jakarta.validation.constraints.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDateTime;
+import java.util.Map; /**
+ * Request DTO for feature flag management
+ */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Schema(description = "Feature flag request")
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class FeatureFlagRequest {
 
     @NotBlank(message = "Feature code is required")
-    @Schema(description = "Feature code")
+    @Pattern(regexp = "^[A-Z_]+$", message = "Feature code must be uppercase with underscores")
     private String featureCode;
 
-    @Schema(description = "Is enabled")
+    @NotBlank(message = "Feature name is required")
+    private String featureName;
+
+    private String description;
+    private FeatureCategory category;
+
+    @NotNull
     private Boolean isEnabled;
 
-    @Schema(description = "Trial days")
+    private Boolean isBeta;
+    private Boolean isExperimental;
+
+    // Requirements
+    private String requiredPlan;
+    private String requiredOrganizationType;
+
+    // Time-based access
+    private LocalDateTime enabledFrom;
+    private LocalDateTime enabledUntil;
+    private Boolean trialEnabled;
     private Integer trialDays;
 
-    @Schema(description = "Usage limit")
+    // Usage limits
+    @Min(0)
     private Integer usageLimit;
-
-    @Schema(description = "Reset frequency", example = "DAILY")
     private String resetFrequency;
 
-    @Schema(description = "Configuration JSON")
-    private String configJson;
+    // Configuration
+    private Map<String, Object> config;
+    private Map<String, Object> metadata;
 
-    @Schema(description = "Rollout percentage")
-    @Min(0) @Max(100)
+    // Rollout
+    @Min(0)
+    @Max(100)
     private Integer rolloutPercentage;
-
-    @Schema(description = "Rollout group")
     private String rolloutGroup;
 }

@@ -1,21 +1,20 @@
 package com.nnipa.tenant.entity;
 
 import jakarta.persistence.*;
-import lombok.*;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
 import lombok.experimental.SuperBuilder;
-import org.springframework.data.annotation.CreatedBy;
-import org.springframework.data.annotation.CreatedDate;
-import org.springframework.data.annotation.LastModifiedBy;
-import org.springframework.data.annotation.LastModifiedDate;
-import org.springframework.data.jpa.domain.support.AuditingEntityListener;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
 
 import java.io.Serializable;
-import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.UUID;
 
 /**
- * Base entity class providing common fields for all entities.
- * Includes audit fields for compliance and tracking.
+ * Base entity class with common audit fields
  */
 @Getter
 @Setter
@@ -23,7 +22,6 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @MappedSuperclass
-@EntityListeners(AuditingEntityListener.class)
 public abstract class BaseEntity implements Serializable {
 
     @Id
@@ -33,83 +31,49 @@ public abstract class BaseEntity implements Serializable {
 
     @Version
     @Column(name = "version", nullable = false)
-    @Builder.Default
     private Long version = 0L;
 
-    @CreatedDate
+    @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
-    private Instant createdAt;
+    private LocalDateTime createdAt;
 
-    @CreatedBy
-    @Column(name = "created_by", updatable = false)
+    @Column(name = "created_by", length = 255)
     private String createdBy;
 
-    @LastModifiedDate
+    @UpdateTimestamp
     @Column(name = "updated_at")
-    private Instant updatedAt;
+    private LocalDateTime updatedAt;
 
-    @LastModifiedBy
-    @Column(name = "updated_by")
+    @Column(name = "updated_by", length = 255)
     private String updatedBy;
 
     @Column(name = "is_deleted", nullable = false)
-    @Builder.Default
     private Boolean isDeleted = false;
 
     @Column(name = "deleted_at")
-    private Instant deletedAt;
+    private LocalDateTime deletedAt;
 
-    @Column(name = "deleted_by")
+    @Column(name = "deleted_by", length = 255)
     private String deletedBy;
 
-    /**
-     * Soft delete the entity.
-     */
-    public void softDelete(String deletedBy) {
-        this.isDeleted = true;
-        this.deletedAt = Instant.now();
-        this.deletedBy = deletedBy;
-    }
-
-    /**
-     * Restore a soft-deleted entity.
-     */
-    public void restore() {
-        this.isDeleted = false;
-        this.deletedAt = null;
-        this.deletedBy = null;
-    }
-
-    /**
-     * Ensures default values are set before persisting.
-     * This acts as a safety net for any mapping issues.
-     */
     @PrePersist
     protected void onCreate() {
-        // Set audit timestamps
         if (createdAt == null) {
-            createdAt = Instant.now();
+            createdAt = LocalDateTime.now();
         }
-        if (updatedAt == null) {
-            updatedAt = Instant.now();
-        }
-
-        // Ensure critical fields are never null
         if (isDeleted == null) {
             isDeleted = false;
-        }
-        if (version == null) {
-            version = 0L;
         }
     }
 
     @PreUpdate
     protected void onUpdate() {
-        updatedAt = Instant.now();
+        updatedAt = LocalDateTime.now();
+    }
 
-        // Safety check for critical fields during updates
-        if (isDeleted == null) {
-            isDeleted = false;
-        }
+    public void markAsDeleted(String deletedBy) {
+        this.isDeleted = true;
+        this.deletedAt = LocalDateTime.now();
+        this.deletedBy = deletedBy;
     }
 }

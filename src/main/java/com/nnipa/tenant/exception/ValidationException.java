@@ -1,9 +1,12 @@
 package com.nnipa.tenant.exception;
 
 import org.springframework.http.HttpStatus;
-
-public class ValidationException extends TenantException {
+import org.springframework.web.bind.annotation.ResponseStatus; /**
+ * Exception for validation errors
+ */
+@ResponseStatus(HttpStatus.BAD_REQUEST)
+public class ValidationException extends RuntimeException {
     public ValidationException(String message) {
-        super(message, "VALIDATION_FAILED", HttpStatus.BAD_REQUEST);
+        super(message);
     }
 }
