@@ -134,6 +134,16 @@ public class KafkaConfig {
                 .build();
     }
 
+    @Bean
+    public NewTopic tenantCreationResponseTopic() {
+        return TopicBuilder.name("nnipa.events.tenant.creation-response")
+                .partitions(6)
+                .replicas(3)
+                .config("retention.ms", "604800000") // 7 days
+                .config("compression.type", "snappy")
+                .build();
+    }
+
     /**
      * Producer configuration for byte array serialization
      */

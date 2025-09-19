@@ -52,5 +52,10 @@ public interface TenantRepository extends JpaRepository<Tenant, UUID> {
         AND t.is_deleted = false
         """, nativeQuery = true)
     List<Tenant> findTenantsNeedingRenewal(@Param("date") LocalDateTime date);
+
+    /**
+     * Check if a tenant exists by organization email
+     */
+    boolean existsByOrganizationEmailAndIsDeletedFalse(String organizationEmail);
 }
 

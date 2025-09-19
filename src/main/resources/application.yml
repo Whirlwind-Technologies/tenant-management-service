@@ -33,6 +33,9 @@ spring:
       ddl-auto: validate
     properties:
       hibernate:
+        transaction:
+          jta:
+            platform: org.hibernate.engine.transaction.jta.platform.internal.NoJtaPlatform
         format_sql: true
         jdbc:
           batch_size: 25
@@ -108,6 +111,10 @@ spring:
       - tenant-settings
       - billing-details
 
+  # Spring AOP configuration for gRPC
+  aop:
+    proxy-target-class: false  # Use JDK dynamic proxies instead of CGLIB
+
 # Schema Registry Configuration
 schema:
   registry:
@@ -174,6 +181,20 @@ tenant:
       - CUSTOM_DASHBOARDS
       - API_ACCESS
       - PRIORITY_SUPPORT
+
+grpc:
+  server:
+    port: 9091  # gRPC server port for tenant service
+    enable-keep-alive: true
+    keep-alive-time: 30s
+    keep-alive-timeout: 5s
+    permit-keep-alive-without-calls: true
+    max-inbound-message-size: 4194304  # 4MB
+    max-inbound-metadata-size: 8192    # 8KB
+
+  # Optional: Enable reflection for debugging with grpcurl
+  server-reflection:
+    enabled: true
 
 # Resilience4j Configuration
 resilience4j:
@@ -247,6 +268,8 @@ logging:
     org.apache.kafka: WARN
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+    io.grpc: INFO
+    com.nnipa.tenant.grpc: DEBUG
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
     file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"

@@ -315,4 +315,12 @@ public class TenantService {
         return tenantRepository.findById(tenantId)
                 .orElseThrow(() -> new TenantNotFoundException("Tenant not found: " + tenantId));
     }
+
+    /**
+     * Check if a tenant exists by email
+     */
+    public boolean existsByEmail(String organizationEmail) {
+        log.debug("Checking if tenant exists by email: {}", organizationEmail);
+        return tenantRepository.existsByOrganizationEmailAndIsDeletedFalse(organizationEmail);
+    }
 }

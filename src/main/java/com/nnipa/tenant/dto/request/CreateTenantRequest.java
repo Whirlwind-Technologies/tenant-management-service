@@ -86,5 +86,15 @@ public class CreateTenantRequest {
 
     // Initial feature flags to enable
     private Map<String, Boolean> initialFeatureFlags;
-}
 
+    // Isolation strategy for multi-tenancy
+    private IsolationStrategy isolationStrategy;
+
+    // Billing email (can be different from organization email)
+    @Email(message = "Invalid billing email format")
+    @Size(max = 255)
+    private String billingEmail;
+
+    // Metadata for additional tenant information
+    private Map<String, String> metadata;
+}

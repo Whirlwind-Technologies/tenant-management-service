@@ -13,7 +13,9 @@ import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.Where;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -121,6 +123,21 @@ public class Tenant extends BaseEntity {
     @Column(name = "api_rate_limit")
     private Integer apiRateLimit;
 
+    @Column(name = "user_count")
+    private Integer userCount = 0;
+
+    /**
+     * Metadata key-value pairs for extensible tenant properties
+     */
+    @ElementCollection
+    @CollectionTable(
+            name = "tenant_metadata",
+            joinColumns = @JoinColumn(name = "tenant_id")
+    )
+    @MapKeyColumn(name = "metadata_key")
+    @Column(name = "metadata_value", length = 1000)
+    private Map<String, String> metadata = new HashMap<>();
+
     // Multi-tenant Hierarchy
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "parent_tenant_id")
@@ -139,7 +156,6 @@ public class Tenant extends BaseEntity {
     @OneToMany(mappedBy = "tenant", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private Set<FeatureFlag> featureFlags = new HashSet<>();
 
-    @PrePersist
     @Override
     protected void onCreate() {
         super.onCreate();
@@ -176,5 +192,22 @@ public class Tenant extends BaseEntity {
     public boolean isTrial() {
         return TenantStatus.TRIAL.equals(status) &&
                 (trialEndsAt == null || trialEndsAt.isAfter(LocalDateTime.now()));
+    }
+
+    public void addMetadata(String key, String value) {
+        if (metadata == null) {
+            metadata = new HashMap<>();
+        }
+        metadata.put(key, value);
+    }
+
+    public String getMetadataValue(String key) {
+        return metadata != null ? metadata.get(key) : null;
+    }
+
+    public void removeMetadata(String key) {
+        if (metadata != null) {
+            metadata.remove(key);
+        }
     }
 }

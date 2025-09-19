@@ -21,15 +21,18 @@ RUN mvn dependency:go-offline -B || true
 COPY src ./src
 RUN mvn clean package -DskipTests
 
-# Runtime stage
-FROM eclipse-temurin:21-jre-alpine
+# Runtime stage - CHANGED: Using glibc-based image instead of Alpine
+FROM eclipse-temurin:21-jre
 
-# Install curl for health checks
-RUN apk add --no-cache curl
+# Install curl for health checks and clean up apt cache
+RUN apt-get update && \
+    apt-get install -y curl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN addgroup -g 1001 -S appuser && \
-    adduser -u 1001 -S appuser -G appuser
+# Create non-root user (Debian/Ubuntu syntax)
+RUN groupadd -g 1001 appuser && \
+    useradd -u 1001 -g appuser -m appuser
 
 # Create directories
 RUN mkdir -p /app/logs && \
