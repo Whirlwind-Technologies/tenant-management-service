@@ -165,6 +165,9 @@ public class Tenant extends BaseEntity {
         if (isVerified == null) {
             isVerified = false;
         }
+        if (isolationStrategy == null) {
+            isolationStrategy = IsolationStrategy.SHARED_SCHEMA_BASIC;
+        }
     }
 
     // Business methods

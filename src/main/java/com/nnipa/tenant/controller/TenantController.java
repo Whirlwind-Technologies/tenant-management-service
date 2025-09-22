@@ -58,7 +58,7 @@ public class TenantController {
             @RequestHeader(value = "X-User-Id", required = false) String userId) {
 
         log.info("Creating tenant: {}", request.getTenantCode());
-        TenantResponse response = tenantService.createTenant(request, userId != null ? userId : "system");
+        TenantResponse response = tenantService.createTenant(request, userId != null ? userId : "system", "");
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 

@@ -1,9 +1,5 @@
 package com.nnipa.tenant.config;
 
-import io.confluent.kafka.serializers.protobuf.KafkaProtobufDeserializer;
-import io.confluent.kafka.serializers.protobuf.KafkaProtobufDeserializerConfig;
-import io.confluent.kafka.serializers.protobuf.KafkaProtobufSerializer;
-import io.confluent.kafka.serializers.protobuf.KafkaProtobufSerializerConfig;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -20,7 +16,6 @@ import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.config.TopicBuilder;
 import org.springframework.kafka.core.*;
 import org.springframework.kafka.listener.ContainerProperties;
-import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -61,6 +56,7 @@ public class KafkaConfig {
                 .replicas(3)
                 .config("retention.ms", "604800000") // 7 days
                 .config("compression.type", "snappy")
+                .config("min.insync.replicas", "2")
                 .build();
     }
 
@@ -71,6 +67,7 @@ public class KafkaConfig {
                 .replicas(3)
                 .config("retention.ms", "604800000")
                 .config("compression.type", "snappy")
+                .config("min.insync.replicas", "2")
                 .build();
     }
 
@@ -81,6 +78,7 @@ public class KafkaConfig {
                 .replicas(3)
                 .config("retention.ms", "604800000")
                 .config("compression.type", "snappy")
+                .config("min.insync.replicas", "2")
                 .build();
     }
 
@@ -91,6 +89,7 @@ public class KafkaConfig {
                 .replicas(3)
                 .config("retention.ms", "604800000")
                 .config("compression.type", "snappy")
+                .config("min.insync.replicas", "2")
                 .build();
     }
 
@@ -101,6 +100,7 @@ public class KafkaConfig {
                 .replicas(3)
                 .config("retention.ms", "604800000")
                 .config("compression.type", "snappy")
+                .config("min.insync.replicas", "2")
                 .build();
     }
 
@@ -111,6 +111,7 @@ public class KafkaConfig {
                 .replicas(3)
                 .config("retention.ms", "604800000")
                 .config("compression.type", "snappy")
+                .config("min.insync.replicas", "2")
                 .build();
     }
 
@@ -121,6 +122,7 @@ public class KafkaConfig {
                 .replicas(3)
                 .config("retention.ms", "604800000")
                 .config("compression.type", "snappy")
+                .config("min.insync.replicas", "2")
                 .build();
     }
 
@@ -131,6 +133,7 @@ public class KafkaConfig {
                 .replicas(3)
                 .config("retention.ms", "604800000")
                 .config("compression.type", "snappy")
+                .config("min.insync.replicas", "2")
                 .build();
     }
 
@@ -141,6 +144,7 @@ public class KafkaConfig {
                 .replicas(3)
                 .config("retention.ms", "604800000") // 7 days
                 .config("compression.type", "snappy")
+                .config("min.insync.replicas", "2")
                 .build();
     }
 
@@ -204,28 +208,4 @@ public class KafkaConfig {
         return factory;
     }
 
-    /**
-     * Protobuf serializer for direct protobuf usage
-     */
-    @Bean
-    public KafkaProtobufSerializer kafkaProtobufSerializer() {
-        KafkaProtobufSerializer serializer = new KafkaProtobufSerializer();
-        Map<String, Object> configs = new HashMap<>();
-        configs.put(KafkaProtobufSerializerConfig.SCHEMA_REGISTRY_URL_CONFIG, schemaRegistryUrl);
-        configs.put(KafkaProtobufSerializerConfig.AUTO_REGISTER_SCHEMAS, true);
-        serializer.configure(configs, false);
-        return serializer;
-    }
-
-    /**
-     * Protobuf deserializer for direct protobuf usage
-     */
-    @Bean
-    public KafkaProtobufDeserializer kafkaProtobufDeserializer() {
-        KafkaProtobufDeserializer deserializer = new KafkaProtobufDeserializer();
-        Map<String, Object> configs = new HashMap<>();
-        configs.put(KafkaProtobufDeserializerConfig.SCHEMA_REGISTRY_URL_CONFIG, schemaRegistryUrl);
-        deserializer.configure(configs, false);
-        return deserializer;
-    }
 }

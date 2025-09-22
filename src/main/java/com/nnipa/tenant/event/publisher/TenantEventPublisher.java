@@ -7,6 +7,7 @@ import com.nnipa.proto.tenant.*;
 import com.nnipa.tenant.entity.FeatureFlag;
 import com.nnipa.tenant.entity.Subscription;
 import com.nnipa.tenant.entity.Tenant;
+import com.nnipa.tenant.repository.TenantRepository;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -33,6 +34,7 @@ import java.util.concurrent.CompletableFuture;
 public class TenantEventPublisher {
 
     private final KafkaTemplate<String, byte[]> kafkaTemplate;
+    private final TenantRepository tenantRepository;
 
     @Value("${spring.application.name}")
     private String applicationName;
@@ -83,12 +85,12 @@ public class TenantEventPublisher {
      * Publish tenant created event
      */
     @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
-    public void publishTenantCreatedEvent(Tenant tenant) {
-        log.info("Publishing tenant created event for tenant: {}", tenant.getTenantCode());
+    public void publishTenantCreatedEvent(Tenant tenant, String correlationId) {
+        log.info("Publishing tenant created event for tenant: {} with correlationId: {}", tenant.getTenantCode(), correlationId);
 
         try {
             TenantCreatedEvent event = TenantCreatedEvent.newBuilder()
-                    .setMetadata(createEventMetadata(tenant.getId().toString(), tenant.getCreatedBy()))
+                    .setMetadata(createEventMetadata(tenant.getId().toString(), tenant.getCreatedBy(), correlationId))
                     .setTenant(buildTenantData(tenant))
                     .build();
 
@@ -105,12 +107,12 @@ public class TenantEventPublisher {
      * Publish tenant updated event
      */
     @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
-    public void publishTenantUpdatedEvent(Tenant tenant) {
-        log.info("Publishing tenant updated event for tenant: {}", tenant.getTenantCode());
+    public void publishTenantUpdatedEvent(Tenant tenant, String correlationId) {
+        log.info("Publishing tenant updated event for tenant: {} with correlationId: {}", tenant.getTenantCode(), correlationId);
 
         try {
             TenantUpdatedEvent event = TenantUpdatedEvent.newBuilder()
-                    .setMetadata(createEventMetadata(tenant.getId().toString(), tenant.getUpdatedBy()))
+                    .setMetadata(createEventMetadata(tenant.getId().toString(), tenant.getUpdatedBy(), correlationId))
                     .setTenant(buildTenantData(tenant))
                     .setUpdatedAt(toTimestamp(tenant.getUpdatedAt()))
                     .setUpdatedBy(tenant.getUpdatedBy() != null ? tenant.getUpdatedBy() : "system")
@@ -129,12 +131,12 @@ public class TenantEventPublisher {
      * Publish tenant activated event
      */
     @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
-    public void publishTenantActivatedEvent(Tenant tenant, String activatedBy) {
-        log.info("Publishing tenant activated event for tenant: {}", tenant.getTenantCode());
+    public void publishTenantActivatedEvent(Tenant tenant, String activatedBy, String correlationId) {
+        log.info("Publishing tenant activated event for tenant: {} with correlationId: {}", tenant.getTenantCode(), correlationId);
 
         try {
             TenantActivatedEvent event = TenantActivatedEvent.newBuilder()
-                    .setMetadata(createEventMetadata(tenant.getId().toString(), activatedBy))
+                    .setMetadata(createEventMetadata(tenant.getId().toString(), activatedBy, correlationId))
                     .setTenantId(tenant.getId().toString())
                     .setTenantCode(tenant.getTenantCode())
                     .setActivatedBy(activatedBy != null ? activatedBy : "system")
@@ -154,12 +156,12 @@ public class TenantEventPublisher {
      * Publish tenant suspended event
      */
     @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
-    public void publishTenantSuspendedEvent(Tenant tenant, String reason) {
-        log.info("Publishing tenant suspended event for tenant: {}", tenant.getTenantCode());
+    public void publishTenantSuspendedEvent(Tenant tenant, String reason, String correlationId) {
+        log.info("Publishing tenant suspended event for tenant: {} with correlationId: {}", tenant.getTenantCode(), correlationId);
 
         try {
             TenantSuspendedEvent event = TenantSuspendedEvent.newBuilder()
-                    .setMetadata(createEventMetadata(tenant.getId().toString(), tenant.getUpdatedBy()))
+                    .setMetadata(createEventMetadata(tenant.getId().toString(), tenant.getUpdatedBy(), correlationId))
                     .setTenantId(tenant.getId().toString())
                     .setTenantCode(tenant.getTenantCode())
                     .setReason(reason != null ? reason : "Suspension requested")
@@ -180,12 +182,12 @@ public class TenantEventPublisher {
      * Publish tenant reactivated event
      */
     @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
-    public void publishTenantReactivatedEvent(Tenant tenant, String reactivatedBy) {
-        log.info("Publishing tenant reactivated event for tenant: {}", tenant.getTenantCode());
+    public void publishTenantReactivatedEvent(Tenant tenant, String reactivatedBy, String correlationId) {
+        log.info("Publishing tenant reactivated event for tenant: {} with correlationId: {}", tenant.getTenantCode(), correlationId);
 
         try {
             TenantReactivatedEvent event = TenantReactivatedEvent.newBuilder()
-                    .setMetadata(createEventMetadata(tenant.getId().toString(), reactivatedBy))
+                    .setMetadata(createEventMetadata(tenant.getId().toString(), reactivatedBy, correlationId))
                     .setTenantId(tenant.getId().toString())
                     .setReactivatedAt(toTimestamp(LocalDateTime.now()))
                     .setReactivatedBy(reactivatedBy != null ? reactivatedBy : "system")
@@ -204,12 +206,12 @@ public class TenantEventPublisher {
      * Publish tenant deleted event
      */
     @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
-    public void publishTenantDeletedEvent(Tenant tenant, String deletedBy) {
-        log.info("Publishing tenant deleted event for tenant: {}", tenant.getTenantCode());
+    public void publishTenantDeletedEvent(Tenant tenant, String deletedBy, String correlationId) {
+        log.info("Publishing tenant deleted event for tenant: {} with correlationId: {}", tenant.getTenantCode(), correlationId);
 
         try {
             TenantDeletedEvent event = TenantDeletedEvent.newBuilder()
-                    .setMetadata(createEventMetadata(tenant.getId().toString(), deletedBy))
+                    .setMetadata(createEventMetadata(tenant.getId().toString(), deletedBy, correlationId))
                     .setTenantId(tenant.getId().toString())
                     .setTenantCode(tenant.getTenantCode())
                     .setDeletedBy(deletedBy != null ? deletedBy : "system")
@@ -230,12 +232,12 @@ public class TenantEventPublisher {
      * Publish subscription created event
      */
     @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
-    public void publishSubscriptionCreatedEvent(Subscription subscription) {
-        log.info("Publishing subscription created event for subscription: {}", subscription.getId());
+    public void publishSubscriptionCreatedEvent(Subscription subscription, String correlationId) {
+        log.info("Publishing subscription created event for subscription: {} with correlationId: {}", subscription.getId(), correlationId);
 
         try {
             SubscriptionCreatedEvent event = SubscriptionCreatedEvent.newBuilder()
-                    .setMetadata(createEventMetadata(subscription.getTenant().getId().toString(), subscription.getCreatedBy()))
+                    .setMetadata(createEventMetadata(subscription.getTenant().getId().toString(), subscription.getCreatedBy(), correlationId))
                     .setSubscription(buildSubscriptionData(subscription))
                     .build();
 
@@ -252,12 +254,12 @@ public class TenantEventPublisher {
      * Publish subscription changed event
      */
     @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
-    public void publishSubscriptionChangedEvent(Subscription subscription, String oldPlan, String changedBy) {
-        log.info("Publishing subscription changed event for subscription: {}", subscription.getId());
+    public void publishSubscriptionChangedEvent(Subscription subscription, String oldPlan, String changedBy, String correlationId) {
+        log.info("Publishing subscription changed event for subscription: {} with correlationId: {}", subscription.getId(), correlationId);
 
         try {
             TenantSubscriptionChangedEvent event = TenantSubscriptionChangedEvent.newBuilder()
-                    .setMetadata(createEventMetadata(subscription.getTenant().getId().toString(), changedBy))
+                    .setMetadata(createEventMetadata(subscription.getTenant().getId().toString(), changedBy, correlationId))
                     .setSubscriptionData(TenantSubscriptionChangedEvent.SubscriptionData.newBuilder()
                             .setTenantId(subscription.getTenant().getId().toString())
                             .setOldPlan(oldPlan)
@@ -283,12 +285,12 @@ public class TenantEventPublisher {
      * Publish subscription cancelled event
      */
     @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
-    public void publishSubscriptionCancelledEvent(Subscription subscription, String reason) {
-        log.info("Publishing subscription cancelled event for subscription: {}", subscription.getId());
+    public void publishSubscriptionCancelledEvent(Subscription subscription, String reason, String correlationId) {
+        log.info("Publishing subscription cancelled event for subscription: {} with correlationId: {}", subscription.getId(), correlationId);
 
         try {
             SubscriptionCancelledEvent event = SubscriptionCancelledEvent.newBuilder()
-                    .setMetadata(createEventMetadata(subscription.getTenant().getId().toString(), subscription.getUpdatedBy()))
+                    .setMetadata(createEventMetadata(subscription.getTenant().getId().toString(), subscription.getUpdatedBy(), correlationId))
                     .setSubscriptionId(subscription.getId().toString())
                     .setTenantId(subscription.getTenant().getId().toString())
                     .setPlan(subscription.getPlan().name())
@@ -310,13 +312,13 @@ public class TenantEventPublisher {
      * Publish feature enabled event
      */
     @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
-    public void publishFeatureEnabledEvent(FeatureFlag feature) {
-        log.info("Publishing feature enabled event for feature: {} in tenant: {}",
-                feature.getFeatureCode(), feature.getTenant().getId());
+    public void publishFeatureEnabledEvent(FeatureFlag feature, String correlationId) {
+        log.info("Publishing feature enabled event for feature: {} in tenant: {} with correlationId: {}",
+                feature.getFeatureCode(), feature.getTenant().getId(), correlationId);
 
         try {
             FeatureEnabledEvent event = FeatureEnabledEvent.newBuilder()
-                    .setMetadata(createEventMetadata(feature.getTenant().getId().toString(), feature.getUpdatedBy()))
+                    .setMetadata(createEventMetadata(feature.getTenant().getId().toString(), feature.getUpdatedBy(), correlationId))
                     .setTenantId(feature.getTenant().getId().toString())
                     .setFeatureCode(feature.getFeatureCode())
                     .setFeatureName(feature.getFeatureName())
@@ -340,13 +342,13 @@ public class TenantEventPublisher {
      * Publish feature disabled event
      */
     @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
-    public void publishFeatureDisabledEvent(FeatureFlag feature) {
-        log.info("Publishing feature disabled event for feature: {} in tenant: {}",
-                feature.getFeatureCode(), feature.getTenant().getId());
+    public void publishFeatureDisabledEvent(FeatureFlag feature, String correlationId) {
+        log.info("Publishing feature disabled event for feature: {} in tenant: {} with correlationId: {}",
+                feature.getFeatureCode(), feature.getTenant().getId(), correlationId);
 
         try {
             FeatureDisabledEvent event = FeatureDisabledEvent.newBuilder()
-                    .setMetadata(createEventMetadata(feature.getTenant().getId().toString(), feature.getUpdatedBy()))
+                    .setMetadata(createEventMetadata(feature.getTenant().getId().toString(), feature.getUpdatedBy(), correlationId))
                     .setTenantId(feature.getTenant().getId().toString())
                     .setFeatureCode(feature.getFeatureCode())
                     .setReason("Feature disabled")
@@ -360,6 +362,74 @@ public class TenantEventPublisher {
             log.error("Failed to publish feature disabled event for: {}", feature.getFeatureCode(), e);
             throw e;
         }
+    }
+
+    /**
+     * Publish tenant created event with tenant ID (for cases where you only have the ID)
+     */
+    @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
+    public void publishTenantCreatedEvent(UUID tenantId, String correlationId) {
+        log.info("Publishing tenant created event for tenant ID: {} with correlationId: {}", tenantId, correlationId);
+
+        try {
+            // Fetch the tenant from repository
+            Tenant tenant = tenantRepository.findById(tenantId)
+                    .orElseThrow(() -> new IllegalArgumentException("Tenant not found with ID: " + tenantId));
+
+            publishTenantCreatedEvent(tenant, correlationId);
+        } catch (Exception e) {
+            log.error("Failed to publish tenant created event for tenant ID: {}", tenantId, e);
+            throw e;
+        }
+    }
+
+    // Overloaded methods for backward compatibility (optional)
+    public void publishTenantCreatedEvent(Tenant tenant) {
+        publishTenantCreatedEvent(tenant, UUID.randomUUID().toString());
+    }
+
+    public void publishTenantCreatedEvent(UUID tenantId) {
+        publishTenantCreatedEvent(tenantId, UUID.randomUUID().toString());
+    }
+
+    public void publishTenantUpdatedEvent(Tenant tenant) {
+        publishTenantUpdatedEvent(tenant, UUID.randomUUID().toString());
+    }
+
+    public void publishTenantActivatedEvent(Tenant tenant, String activatedBy) {
+        publishTenantActivatedEvent(tenant, activatedBy, UUID.randomUUID().toString());
+    }
+
+    public void publishTenantSuspendedEvent(Tenant tenant, String reason) {
+        publishTenantSuspendedEvent(tenant, reason, UUID.randomUUID().toString());
+    }
+
+    public void publishTenantReactivatedEvent(Tenant tenant, String reactivatedBy) {
+        publishTenantReactivatedEvent(tenant, reactivatedBy, UUID.randomUUID().toString());
+    }
+
+    public void publishTenantDeletedEvent(Tenant tenant, String deletedBy) {
+        publishTenantDeletedEvent(tenant, deletedBy, UUID.randomUUID().toString());
+    }
+
+    public void publishSubscriptionCreatedEvent(Subscription subscription) {
+        publishSubscriptionCreatedEvent(subscription, UUID.randomUUID().toString());
+    }
+
+    public void publishSubscriptionChangedEvent(Subscription subscription, String oldPlan, String changedBy) {
+        publishSubscriptionChangedEvent(subscription, oldPlan, changedBy, UUID.randomUUID().toString());
+    }
+
+    public void publishSubscriptionCancelledEvent(Subscription subscription, String reason) {
+        publishSubscriptionCancelledEvent(subscription, reason, UUID.randomUUID().toString());
+    }
+
+    public void publishFeatureEnabledEvent(FeatureFlag feature) {
+        publishFeatureEnabledEvent(feature, UUID.randomUUID().toString());
+    }
+
+    public void publishFeatureDisabledEvent(FeatureFlag feature) {
+        publishFeatureDisabledEvent(feature, UUID.randomUUID().toString());
     }
 
     /**
@@ -450,12 +520,12 @@ public class TenantEventPublisher {
     }
 
     /**
-     * Create event metadata
+     * Create event metadata with correlation ID
      */
-    private EventMetadata createEventMetadata(String tenantId, String userId) {
+    private EventMetadata createEventMetadata(String tenantId, String userId, String correlationId) {
         return EventMetadata.newBuilder()
                 .setEventId(UUID.randomUUID().toString())
-                .setCorrelationId(UUID.randomUUID().toString())
+                .setCorrelationId(correlationId != null ? correlationId : UUID.randomUUID().toString())
                 .setSourceService(applicationName)
                 .setTimestamp(toTimestamp(Instant.now()))
                 .setVersion("1.0")

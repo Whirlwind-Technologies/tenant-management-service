@@ -67,7 +67,7 @@ public class TenantEventConsumer {
             log.info("Processing create tenant command for organization: {}", command.getOrganizationName());
 
             CreateTenantRequest request = buildCreateTenantRequest(command);
-            tenantService.createTenant(request, command.getUserId());
+            tenantService.createTenant(request, command.getUserId(), "");
 
             log.info("Successfully created tenant from command: {}", command.getOrganizationName());
             acknowledgment.acknowledge();

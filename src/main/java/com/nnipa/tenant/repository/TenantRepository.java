@@ -1,5 +1,4 @@
 package com.nnipa.tenant.repository;
-
 import com.nnipa.tenant.entity.*;
 import com.nnipa.tenant.enums.*;
 import org.springframework.data.domain.Page;
@@ -9,7 +8,6 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
-
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -30,6 +28,16 @@ public interface TenantRepository extends JpaRepository<Tenant, UUID> {
     Page<Tenant> findByStatus(TenantStatus status, Pageable pageable);
 
     Page<Tenant> findByOrganizationType(OrganizationType type, Pageable pageable);
+
+    /**
+     * Find tenant by organization email
+     */
+    Optional<Tenant> findByOrganizationEmail(String organizationEmail);
+
+    /**
+     * Find tenant by organization email, excluding deleted tenants
+     */
+    Optional<Tenant> findByOrganizationEmailAndIsDeletedFalse(String organizationEmail);
 
     @Query("SELECT t FROM Tenant t WHERE t.parentTenant.id = :parentId AND t.isDeleted = false")
     List<Tenant> findChildTenants(@Param("parentId") UUID parentId);
@@ -58,4 +66,3 @@ public interface TenantRepository extends JpaRepository<Tenant, UUID> {
      */
     boolean existsByOrganizationEmailAndIsDeletedFalse(String organizationEmail);
 }
-

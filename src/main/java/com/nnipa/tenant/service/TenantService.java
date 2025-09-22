@@ -46,7 +46,7 @@ public class TenantService {
      * Create a new tenant
      */
     @Transactional
-    public TenantResponse createTenant(CreateTenantRequest request, String createdBy) {
+    public TenantResponse createTenant(CreateTenantRequest request, String createdBy, String correlationId) {
         log.info("Creating tenant with code: {}", request.getTenantCode());
 
         // Check if tenant code already exists
@@ -94,7 +94,7 @@ public class TenantService {
         }
 
         // Publish event
-        eventPublisher.publishTenantCreatedEvent(tenant);
+        eventPublisher.publishTenantCreatedEvent(tenant, correlationId);
 
         return tenantMapper.toResponse(tenant);
     }

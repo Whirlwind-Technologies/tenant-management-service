@@ -2,23 +2,16 @@ package com.nnipa.tenant.event.consumer;
 
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.nnipa.proto.tenant.CreateTenantCommand;
-import com.nnipa.proto.tenant.TenantCreatedEvent;
-import com.nnipa.proto.tenant.TenantCreationResponseEvent;
-import com.nnipa.proto.tenant.TenantData;
-import com.nnipa.proto.common.EventMetadata;
 import com.nnipa.tenant.dto.request.CreateTenantRequest;
 import com.nnipa.tenant.dto.response.TenantResponse;
 import com.nnipa.tenant.entity.Tenant;
-import com.nnipa.tenant.enums.OrganizationType;
-import com.nnipa.tenant.enums.SubscriptionPlan;
 import com.nnipa.tenant.enums.IsolationStrategy;
-import com.nnipa.tenant.enums.TenantStatus;
 import com.nnipa.tenant.event.publisher.TenantEventPublisher;
-import com.nnipa.tenant.exception.TenantAlreadyExistsException;
+import com.nnipa.tenant.repository.TenantRepository;
 import com.nnipa.tenant.service.TenantService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.Acknowledgment;
@@ -28,14 +21,12 @@ import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
-import java.util.HashMap;
-import java.util.Map;
+import java.time.Duration;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Kafka consumer for tenant-related commands from other services.
- * Handles asynchronous tenant creation when synchronous gRPC calls fail.
+ * Kafka consumer for tenant-related commands with idempotency protection
  */
 @Slf4j
 @Component
@@ -45,10 +36,16 @@ public class TenantCommandConsumer {
     private final TenantService tenantService;
     private final TenantEventPublisher tenantEventPublisher;
     private final KafkaTemplate<String, byte[]> kafkaTemplate;
+    private final TenantRepository tenantRepository;
+    private final StringRedisTemplate redisTemplate;
+
+    private static final String PROCESSING_KEY_PREFIX = "tenant:processing:";
+    private static final String COMPLETED_KEY_PREFIX = "tenant:completed:";
+    private static final Duration PROCESSING_LOCK_DURATION = Duration.ofMinutes(5);
+    private static final Duration COMPLETED_CACHE_DURATION = Duration.ofHours(24);
 
     /**
-     * Consume CreateTenantCommand from auth-service when synchronous creation fails.
-     * This ensures tenant creation even when gRPC communication is down.
+     * Consume CreateTenantCommand from auth-service with idempotency protection
      */
     @KafkaListener(
             topics = "${kafka.topics.create-tenant-command:nnipa.commands.tenant.create}",
@@ -68,273 +65,208 @@ public class TenantCommandConsumer {
                 topic, partition, offset, key);
 
         try {
-            // Parse the protobuf message - using the correct proto from tenant package
             CreateTenantCommand command = CreateTenantCommand.parseFrom(message);
             String correlationId = command.getMetadata().getCorrelationId();
-
-            // Extract details from the command structure
             CreateTenantCommand.TenantDetails details = command.getDetails();
 
             log.info("Processing CreateTenantCommand for organization: {} with correlationId: {}",
                     details.getName(), correlationId);
 
-            // Check if tenant already exists (idempotency check)
-            if (isTenantAlreadyProcessed(details.getAdminEmail(), correlationId)) {
-                log.info("Tenant already exists for organization: {}, skipping creation",
-                        details.getName());
+            // IDEMPOTENCY CHECK 1: Check if this command is currently being processed
+            String processingKey = PROCESSING_KEY_PREFIX + correlationId;
+            Boolean lockAcquired = redisTemplate.opsForValue()
+                    .setIfAbsent(processingKey, "processing", PROCESSING_LOCK_DURATION);
+
+            if (Boolean.FALSE.equals(lockAcquired)) {
+                log.warn("Command with correlationId {} is already being processed, skipping", correlationId);
                 acknowledgment.acknowledge();
                 return;
             }
 
-            // Build internal request from command details
-            CreateTenantRequest request = buildCreateTenantRequest(details);
+            try {
+                // IDEMPOTENCY CHECK 2: Check if this command was already completed
+                String completedKey = COMPLETED_KEY_PREFIX + correlationId;
+                String existingTenantId = redisTemplate.opsForValue().get(completedKey);
 
-            // Extract user ID from metadata if available
-            String userId = extractUserIdFromMetadata(details.getMetadataMap());
+                if (existingTenantId != null) {
+                    log.info("Command with correlationId {} was already processed, tenant ID: {}",
+                            correlationId, existingTenantId);
 
-            // Create tenant using existing service
-            TenantResponse tenantResponse = tenantService.createTenant(
-                    request,
-                    userId != null ? userId : "system" // Use system if no user ID
-            );
+                    // Send the response again in case the original response was lost
+                    publishTenantCreationResponse(
+                            UUID.fromString(existingTenantId),
+                            correlationId,
+                            extractUserIdFromMetadata(details.getMetadataMap()),
+                            "DUPLICATE"
+                    );
 
-            log.info("Successfully created tenant from command: {} with ID: {}",
-                    details.getName(), tenantResponse.getId());
+                    acknowledgment.acknowledge();
+                    return;
+                }
 
-            // Publish TenantCreatedEvent for other services
-            publishTenantCreatedEvent(tenantResponse, command);
+                // IDEMPOTENCY CHECK 3: Check if tenant already exists by email
+                Optional<Tenant> existingTenant = tenantRepository.findByOrganizationEmail(details.getAdminEmail());
+                if (existingTenant.isPresent()) {
+                    log.info("Tenant already exists with email: {}, tenant ID: {}",
+                            details.getAdminEmail(), existingTenant.get().getId());
 
-            // Publish a response event back to auth-service with the actual tenant ID
-            if (userId != null) {
-                publishTenantCreationResponse(tenantResponse, command, userId);
+                    // Cache the result
+                    redisTemplate.opsForValue().set(
+                            completedKey,
+                            existingTenant.get().getId().toString(),
+                            COMPLETED_CACHE_DURATION
+                    );
+
+                    // Send response with existing tenant
+                    publishTenantCreationResponse(
+                            existingTenant.get().getId(),
+                            correlationId,
+                            extractUserIdFromMetadata(details.getMetadataMap()),
+                            "SUCCESS"
+                    );
+
+                    acknowledgment.acknowledge();
+                    return;
+                }
+
+                // Build internal request from command details
+                CreateTenantRequest request = buildCreateTenantRequest(details);
+
+                // Extract user ID from metadata
+                String userId = extractUserIdFromMetadata(details.getMetadataMap());
+
+                // Create tenant using existing service
+                TenantResponse tenantResponse = tenantService.createTenant(
+                        request,
+                        userId != null ? userId : "system",
+                        ""
+                );
+
+                // Cache the successful creation
+                redisTemplate.opsForValue().set(
+                        completedKey,
+                        tenantResponse.getId().toString(),
+                        COMPLETED_CACHE_DURATION
+                );
+
+                log.info("Successfully created tenant from command: {} with ID: {}",
+                        details.getName(), tenantResponse.getId());
+
+                // Publish events
+                tenantEventPublisher.publishTenantCreatedEvent(tenantResponse.getId(), correlationId);
+
+                // Send response back to auth-service
+                publishTenantCreationResponse(
+                        tenantResponse.getId(),
+                        correlationId,
+                        userId,
+                        "SUCCESS"
+                );
+
+                acknowledgment.acknowledge();
+
+            } finally {
+                // Always remove the processing lock
+                redisTemplate.delete(processingKey);
             }
-
-            // Acknowledge message after successful processing
-            acknowledgment.acknowledge();
 
         } catch (InvalidProtocolBufferException e) {
             log.error("Failed to parse CreateTenantCommand from offset: {}", offset, e);
-            // Acknowledge to avoid stuck messages - the message is corrupt
+            // Acknowledge to avoid stuck messages on parse errors
             acknowledgment.acknowledge();
-        } catch (TenantAlreadyExistsException e) {
-            log.warn("Tenant already exists: {}", e.getMessage());
-            // Acknowledge to prevent reprocessing
-            acknowledgment.acknowledge();
+
         } catch (Exception e) {
             log.error("Failed to process CreateTenantCommand from offset: {}", offset, e);
-            // Don't acknowledge - let it retry with backoff
+            // Don't acknowledge - let it retry after rebalance
+            // But remove the processing lock to allow retry
+            if (key != null) {
+                redisTemplate.delete(PROCESSING_KEY_PREFIX + key);
+            }
         }
     }
 
-    /**
-     * Extract user ID from metadata map.
-     */
-    private String extractUserIdFromMetadata(Map<String, String> metadata) {
-        // Try different keys that might contain user ID
-        if (metadata.containsKey("user_id")) {
-            return metadata.get("user_id");
-        }
-        if (metadata.containsKey("username")) {
-            return metadata.get("username");
-        }
-        if (metadata.containsKey("user_email")) {
-            // You might need to look up user by email
-            return metadata.get("user_email");
-        }
-        return null;
-    }
-
-    /**
-     * Check if tenant was already created (idempotency).
-     */
-    private boolean isTenantAlreadyProcessed(String adminEmail, String correlationId) {
-        try {
-            // Check by email or correlation ID
-            // You might want to store processed correlation IDs in Redis for idempotency
-            return tenantService.existsByEmail(adminEmail);
-        } catch (Exception e) {
-            log.debug("Error checking if tenant exists", e);
-            return false;
-        }
-    }
-
-    /**
-     * Build CreateTenantRequest from Protobuf TenantDetails.
-     */
     private CreateTenantRequest buildCreateTenantRequest(CreateTenantCommand.TenantDetails details) {
-        CreateTenantRequest.CreateTenantRequestBuilder builder = CreateTenantRequest.builder()
+        return CreateTenantRequest.builder()
                 .tenantCode(details.getCode())
                 .name(details.getName())
                 .organizationEmail(details.getAdminEmail())
                 .organizationType(mapOrganizationType(details.getOrganizationType()))
                 .subscriptionPlan(mapSubscriptionPlan(details.getSubscriptionPlan()))
                 .isolationStrategy(mapIsolationStrategy(details.getIsolationStrategy()))
-                .autoActivate(true); // Default to auto-activate for async creation
-
-        // Add metadata if present
-        if (!details.getMetadataMap().isEmpty()) {
-            Map<String, String> metadata = new HashMap<>(details.getMetadataMap());
-            builder.metadata(metadata);
-        }
-
-        // Add settings if present
-        if (!details.getSettingsMap().isEmpty()) {
-            Map<String, String> settings = new HashMap<>(details.getSettingsMap());
-            builder.initialSettings(settings);
-        }
-
-        // Set billing email if different from admin email
-        if (details.getBillingEmail() != null && !details.getBillingEmail().isEmpty()) {
-            builder.billingEmail(details.getBillingEmail());
-        }
-
-        return builder.build();
+                .metadata(details.getMetadataMap())
+                .initialSettings(details.getSettingsMap())
+                .build();
     }
 
-    /**
-     * Publish TenantCreatedEvent for other services to consume.
-     */
-    private void publishTenantCreatedEvent(TenantResponse tenantResponse, CreateTenantCommand command) {
-        try {
-            CreateTenantCommand.TenantDetails details = command.getDetails();
-
-            TenantData tenantData = TenantData.newBuilder()
-                    .setTenantId(tenantResponse.getId().toString())
-                    .setTenantCode(tenantResponse.getTenantCode())
-                    .setName(tenantResponse.getName())
-                    .setOrganizationType(tenantResponse.getOrganizationType().name())
-                    .setStatus(tenantResponse.getStatus().name())
-                    .setOrganizationEmail(details.getAdminEmail())
-                    .setIsolationStrategy(details.getIsolationStrategy())
-                    .setCreatedAt(com.google.protobuf.Timestamp.newBuilder()
-                            .setSeconds(Instant.now().getEpochSecond())
-                            .build())
-                    .build();
-
-            TenantCreatedEvent event = TenantCreatedEvent.newBuilder()
-                    .setMetadata(EventMetadata.newBuilder()
-                            .setEventId(UUID.randomUUID().toString())
-                            .setCorrelationId(command.getMetadata().getCorrelationId())
-                            .setSourceService("tenant-management-service")
-                            .setEventType("TenantCreated")
-                            .setTimestamp(com.google.protobuf.Timestamp.newBuilder()
-                                    .setSeconds(Instant.now().getEpochSecond())
-                                    .build())
-                            .build())
-                    .setTenant(tenantData)
-                    .build();
-
-            kafkaTemplate.send(
-                    "nnipa.events.tenant.created",
-                    command.getMetadata().getCorrelationId(),
-                    event.toByteArray()
-            );
-
-            log.info("Published TenantCreatedEvent for tenant: {}", tenantResponse.getId());
-
-        } catch (Exception e) {
-            log.error("Failed to publish TenantCreatedEvent", e);
-        }
+    private String extractUserIdFromMetadata(java.util.Map<String, String> metadata) {
+        return metadata != null ? metadata.get("user_id") : null;
     }
 
-    /**
-     * Publish response back to auth-service with the actual tenant ID.
-     * Auth-service needs to update the user's tenant association.
-     */
-    private void publishTenantCreationResponse(TenantResponse tenantResponse,
-                                               CreateTenantCommand command,
-                                               String userId) {
+    private void publishTenantCreationResponse(UUID tenantId, String correlationId,
+                                               String userId, String status) {
         try {
-            CreateTenantCommand.TenantDetails details = command.getDetails();
-
-            // Create a custom response event for auth-service
-            TenantCreationResponseEvent response = TenantCreationResponseEvent.newBuilder()
-                    .setMetadata(EventMetadata.newBuilder()
-                            .setEventId(UUID.randomUUID().toString())
-                            .setCorrelationId(command.getMetadata().getCorrelationId())
-                            .setSourceService("tenant-management-service")
-                            .setEventType("TenantCreationResponse")
-                            .setTimestamp(com.google.protobuf.Timestamp.newBuilder()
-                                    .setSeconds(Instant.now().getEpochSecond())
+            com.nnipa.proto.tenant.TenantCreationResponseEvent response =
+                    com.nnipa.proto.tenant.TenantCreationResponseEvent.newBuilder()
+                            .setMetadata(com.nnipa.proto.common.EventMetadata.newBuilder()
+                                    .setEventId(UUID.randomUUID().toString())
+                                    .setCorrelationId(correlationId)
+                                    .setTimestamp(com.google.protobuf.Timestamp.newBuilder()
+                                            .setSeconds(System.currentTimeMillis() / 1000)
+                                            .build())
                                     .build())
-                            .build())
-                    .setUserId(userId)
-                    .setUserEmail(details.getMetadataMap().get("user_email"))
-                    .setTenantId(tenantResponse.getId().toString())
-                    .setTenantCode(tenantResponse.getTenantCode())
-                    .setOrganizationName(details.getName())
-                    .setStatus("SUCCESS")
-                    .setCreatedAt(com.google.protobuf.Timestamp.newBuilder()
-                            .setSeconds(Instant.now().getEpochSecond())
-                            .build())
-                    .build();
+                            .setTenantId(tenantId.toString())
+                            .setUserId(userId != null ? userId : "")
+                            .setStatus(status)
+                            .build();
 
-            // Send to a specific topic that auth-service listens to
             kafkaTemplate.send(
                     "nnipa.events.tenant.creation-response",
-                    command.getMetadata().getCorrelationId(),
+                    correlationId,
                     response.toByteArray()
-            );
-
-            log.info("Published TenantCreationResponse for user: {} with tenant: {}",
-                    userId, tenantResponse.getId());
-
+            ).whenComplete((result, ex) -> {
+                if (ex != null) {
+                    log.error("Failed to publish TenantCreationResponseEvent", ex);
+                } else {
+                    log.info("Published TenantCreationResponse for user: {} with tenant: {}",
+                            userId, tenantId);
+                }
+            });
         } catch (Exception e) {
-            log.error("Failed to publish TenantCreationResponse", e);
+            log.error("Error publishing tenant creation response", e);
         }
     }
 
-    /**
-     * Map organization type from string to enum.
-     */
-    private OrganizationType mapOrganizationType(String type) {
+    // Mapping helper methods
+    private com.nnipa.tenant.enums.OrganizationType mapOrganizationType(String type) {
         if (type == null || type.isEmpty()) {
-            return OrganizationType.CORPORATION;
+            return com.nnipa.tenant.enums.OrganizationType.CORPORATION;
         }
-
-        // Handle special case for SELF_SIGNUP
-        if ("SELF_SIGNUP".equalsIgnoreCase(type)) {
-            return OrganizationType.STARTUP; // Or whatever default you want for self-signup
-        }
-
         try {
-            return OrganizationType.valueOf(type.toUpperCase());
+            return com.nnipa.tenant.enums.OrganizationType.valueOf(type.toUpperCase());
         } catch (IllegalArgumentException e) {
             log.warn("Unknown organization type: {}, defaulting to CORPORATION", type);
-            return OrganizationType.CORPORATION;
+            return com.nnipa.tenant.enums.OrganizationType.CORPORATION;
         }
     }
 
-    /**
-     * Map subscription plan from string to enum.
-     */
-    private SubscriptionPlan mapSubscriptionPlan(String plan) {
+    private com.nnipa.tenant.enums.SubscriptionPlan mapSubscriptionPlan(String plan) {
         if (plan == null || plan.isEmpty()) {
-            return SubscriptionPlan.FREEMIUM;
+            return com.nnipa.tenant.enums.SubscriptionPlan.FREEMIUM;
         }
-
-        // Handle FREE -> FREEMIUM mapping if needed
-        if ("FREE".equalsIgnoreCase(plan)) {
-            return SubscriptionPlan.FREEMIUM;
-        }
-
         try {
-            return SubscriptionPlan.valueOf(plan.toUpperCase());
+            return com.nnipa.tenant.enums.SubscriptionPlan.valueOf(plan.toUpperCase());
         } catch (IllegalArgumentException e) {
             log.warn("Unknown subscription plan: {}, defaulting to FREEMIUM", plan);
-            return SubscriptionPlan.FREEMIUM;
+            return com.nnipa.tenant.enums.SubscriptionPlan.FREEMIUM;
         }
     }
 
-    /**
-     * Map isolation strategy from string to enum.
-     */
-    private IsolationStrategy mapIsolationStrategy(String strategy) {
+    private com.nnipa.tenant.enums.IsolationStrategy mapIsolationStrategy(String strategy) {
         if (strategy == null || strategy.isEmpty()) {
             return IsolationStrategy.SHARED_SCHEMA_BASIC;
         }
         try {
-            return IsolationStrategy.valueOf(strategy.toUpperCase());
+            return com.nnipa.tenant.enums.IsolationStrategy.valueOf(strategy.toUpperCase());
         } catch (IllegalArgumentException e) {
             log.warn("Unknown isolation strategy: {}, defaulting to SHARED", strategy);
             return IsolationStrategy.SHARED_SCHEMA_BASIC;

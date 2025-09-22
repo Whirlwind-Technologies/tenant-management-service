@@ -60,10 +60,19 @@ public class TenantGrpcService extends TenantServiceGrpc.TenantServiceImplBase {
             // Create tenant using existing service
             TenantResponse tenantResponse = tenantService.createTenant(
                     internalRequest,
-                    request.getCreatedBy()
+                    request.getCreatedBy(),
+                    request.getCorrelationId()
             );
 
-            CreateTenantResponse response = handleTenantCreation(request);
+            // FIXED: Build proper response with actual tenant data
+            CreateTenantResponse response = CreateTenantResponse.newBuilder()
+                    .setTenantId(tenantResponse.getId().toString())  // Use actual tenant ID
+                    .setTenantCode(tenantResponse.getTenantCode())   // Use actual tenant code
+                    .setName(tenantResponse.getName())
+                    .setStatus(tenantResponse.getStatus().name())
+                    .setCreatedAt(toTimestamp(tenantResponse.getCreatedAt()))
+                    .build();
+
             responseObserver.onNext(response);
             responseObserver.onCompleted();
 
@@ -75,17 +84,6 @@ public class TenantGrpcService extends TenantServiceGrpc.TenantServiceImplBase {
                     .withDescription("Failed to create tenant: " + e.getMessage())
                     .asRuntimeException());
         }
-    }
-
-    private CreateTenantResponse handleTenantCreation(com.nnipa.proto.tenant.CreateTenantRequest request) {
-        // Your tenant creation logic here
-        // This method can be proxied by Spring if needed
-        return CreateTenantResponse.newBuilder()
-                .setTenantId("test-id")
-                .setTenantCode("TEST")
-                .setName(request.getName())
-                .setStatus("ACTIVE")
-                .build();
     }
 
     /**
