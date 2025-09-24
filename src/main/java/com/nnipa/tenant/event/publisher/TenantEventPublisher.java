@@ -82,16 +82,17 @@ public class TenantEventPublisher {
     private String featureUpdatedTopic;
 
     /**
-     * Publish tenant created event
+     * Publish tenant created event with actual user ID (NEW METHOD)
      */
     @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
-    public void publishTenantCreatedEvent(Tenant tenant, String correlationId) {
-        log.info("Publishing tenant created event for tenant: {} with correlationId: {}", tenant.getTenantCode(), correlationId);
+    public void publishTenantCreatedEvent(Tenant tenant, String correlationId, String actualUserId) {
+        log.info("Publishing tenant created event for tenant: {} with correlationId: {} and userId: {}",
+                tenant.getTenantCode(), correlationId, actualUserId);
 
         try {
             TenantCreatedEvent event = TenantCreatedEvent.newBuilder()
-                    .setMetadata(createEventMetadata(tenant.getId().toString(), tenant.getCreatedBy(), correlationId))
-                    .setTenant(buildTenantData(tenant))
+                    .setMetadata(createEventMetadata(tenant.getId().toString(), actualUserId, correlationId))
+                    .setTenant(buildTenantDataWithUserId(tenant, actualUserId))
                     .build();
 
             publishEvent(tenantCreatedTopic, tenant.getId().toString(), event.toByteArray());
@@ -101,6 +102,116 @@ public class TenantEventPublisher {
             log.error("Failed to publish tenant created event for: {}", tenant.getTenantCode(), e);
             throw e;
         }
+    }
+
+    /**
+     * Publish tenant created event (UPDATED METHOD with better user ID handling)
+     */
+    @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
+    public void publishTenantCreatedEvent(Tenant tenant, String correlationId) {
+        log.info("Publishing tenant created event for tenant: {} with correlationId: {}", tenant.getTenantCode(), correlationId);
+
+        try {
+            // Determine the actual user ID to use in metadata
+            String actualUserId = determineActualUserId(tenant);
+
+            TenantCreatedEvent event = TenantCreatedEvent.newBuilder()
+                    .setMetadata(createEventMetadata(tenant.getId().toString(), actualUserId, correlationId))
+                    .setTenant(buildTenantDataWithUserId(tenant, actualUserId))
+                    .build();
+
+            publishEvent(tenantCreatedTopic, tenant.getId().toString(), event.toByteArray());
+
+            log.info("Successfully published tenant created event for: {}", tenant.getTenantCode());
+        } catch (Exception e) {
+            log.error("Failed to publish tenant created event for: {}", tenant.getTenantCode(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * Determine the actual user ID from tenant data
+     */
+    private String determineActualUserId(Tenant tenant) {
+        // Check if tenant metadata contains the actual user ID
+        if (tenant.getMetadata() != null && tenant.getMetadata().containsKey("user_id")) {
+            String metadataUserId = tenant.getMetadata().get("user_id");
+            if (metadataUserId != null && !metadataUserId.trim().isEmpty()
+                    && !metadataUserId.equals("SELF_SIGNUP")) {
+                return metadataUserId;
+            }
+        }
+
+        // Check if tenant metadata contains created_by user
+        if (tenant.getMetadata() != null && tenant.getMetadata().containsKey("created_by_user_id")) {
+            String createdByUserId = tenant.getMetadata().get("created_by_user_id");
+            if (createdByUserId != null && !createdByUserId.trim().isEmpty()
+                    && !createdByUserId.equals("SELF_SIGNUP")) {
+                return createdByUserId;
+            }
+        }
+
+        // Check if createdBy field contains a valid UUID
+        String createdBy = tenant.getCreatedBy();
+        if (createdBy != null && !createdBy.equals("SELF_SIGNUP") && !createdBy.equals("system")) {
+            try {
+                UUID.fromString(createdBy);
+                return createdBy;
+            } catch (IllegalArgumentException e) {
+                // Not a valid UUID, continue to fallback
+            }
+        }
+
+        // Fallback to system for self-signup cases
+        log.warn("Could not determine actual user ID for tenant: {}, using 'system'", tenant.getId());
+        return "system";
+    }
+
+    /**
+     * Build tenant data with proper user ID handling
+     */
+    private TenantData buildTenantDataWithUserId(Tenant tenant, String actualUserId) {
+        TenantData.Builder builder = TenantData.newBuilder()
+                .setTenantId(tenant.getId().toString())
+                .setTenantCode(tenant.getTenantCode())
+                .setName(tenant.getName())
+                .setOrganizationType(tenant.getOrganizationType().name())
+                .setStatus(tenant.getStatus().name())
+                .setCreatedAt(toTimestamp(tenant.getCreatedAt()));
+
+        // Add optional fields
+        if (tenant.getDisplayName() != null) {
+            builder.setDisplayName(tenant.getDisplayName());
+        }
+        if (tenant.getOrganizationEmail() != null) {
+            builder.setOrganizationEmail(tenant.getOrganizationEmail());
+        }
+        if (tenant.getCountry() != null) {
+            builder.setCountry(tenant.getCountry());
+        }
+        if (tenant.getIsolationStrategy() != null) {
+            builder.setIsolationStrategy(tenant.getIsolationStrategy().name());
+        }
+        if (tenant.getMaxUsers() != null) {
+            builder.setMaxUsers(tenant.getMaxUsers());
+        }
+        if (tenant.getStorageQuotaGb() != null) {
+            builder.setStorageQuotaGb(tenant.getStorageQuotaGb());
+        }
+
+        // Add metadata with actual user ID using the correct protobuf API
+        Map<String, String> metadata = new HashMap<>();
+        if (tenant.getMetadata() != null) {
+            metadata.putAll(tenant.getMetadata());
+        }
+        metadata.put("user_id", actualUserId);
+
+        // Use putMetadata for individual entries
+        for (Map.Entry<String, String> entry : metadata.entrySet()) {
+            builder.putMetadata(entry.getKey(), entry.getValue());
+        }
+
+        return builder.build();
     }
 
     /**
@@ -365,7 +476,7 @@ public class TenantEventPublisher {
     }
 
     /**
-     * Publish tenant created event with tenant ID (for cases where you only have the ID)
+     * Publish tenant created event with tenant ID (UPDATED to pass actual user ID)
      */
     @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
     public void publishTenantCreatedEvent(UUID tenantId, String correlationId) {
@@ -383,7 +494,27 @@ public class TenantEventPublisher {
         }
     }
 
-    // Overloaded methods for backward compatibility (optional)
+    /**
+     * Publish tenant created event with tenant ID and actual user ID (NEW METHOD)
+     */
+    @CircuitBreaker(name = "kafka-producer", fallbackMethod = "handlePublishFailure")
+    public void publishTenantCreatedEvent(UUID tenantId, String correlationId, String actualUserId) {
+        log.info("Publishing tenant created event for tenant ID: {} with correlationId: {} and userId: {}",
+                tenantId, correlationId, actualUserId);
+
+        try {
+            // Fetch the tenant from repository
+            Tenant tenant = tenantRepository.findById(tenantId)
+                    .orElseThrow(() -> new IllegalArgumentException("Tenant not found with ID: " + tenantId));
+
+            publishTenantCreatedEvent(tenant, correlationId, actualUserId);
+        } catch (Exception e) {
+            log.error("Failed to publish tenant created event for tenant ID: {}", tenantId, e);
+            throw e;
+        }
+    }
+
+    // Overloaded methods for backward compatibility
     public void publishTenantCreatedEvent(Tenant tenant) {
         publishTenantCreatedEvent(tenant, UUID.randomUUID().toString());
     }
@@ -433,7 +564,7 @@ public class TenantEventPublisher {
     }
 
     /**
-     * Build tenant data for events
+     * Build tenant data for events (ORIGINAL METHOD - keep for backward compatibility)
      */
     private TenantData buildTenantData(Tenant tenant) {
         TenantData.Builder builder = TenantData.newBuilder()

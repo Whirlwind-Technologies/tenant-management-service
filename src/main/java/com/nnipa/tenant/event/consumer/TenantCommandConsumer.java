@@ -22,6 +22,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -129,11 +130,23 @@ public class TenantCommandConsumer {
                     return;
                 }
 
+                // Extract user ID from metadata
+                String userId = extractUserIdFromMetadata(details.getMetadataMap());
+
+                log.info("Extracted userId from command metadata: {}", userId);
+                log.info("Command metadata: {}", details.getMetadataMap());
+
                 // Build internal request from command details
                 CreateTenantRequest request = buildCreateTenantRequest(details);
 
-                // Extract user ID from metadata
-                String userId = extractUserIdFromMetadata(details.getMetadataMap());
+                // Ensure the user ID is in the request metadata
+                if (request.getMetadata() == null) {
+                    request.setMetadata(new HashMap<>());
+                }
+                if (userId != null) {
+                    request.getMetadata().put("user_id", userId);
+                    request.getMetadata().put("created_by_user_id", userId);
+                }
 
                 // Create tenant using existing service
                 TenantResponse tenantResponse = tenantService.createTenant(
@@ -149,11 +162,16 @@ public class TenantCommandConsumer {
                         COMPLETED_CACHE_DURATION
                 );
 
-                log.info("Successfully created tenant from command: {} with ID: {}",
-                        details.getName(), tenantResponse.getId());
+                log.info("Successfully created tenant from command: {} with ID: {}, userId: {}",
+                        details.getName(), tenantResponse.getId(), userId);
 
-                // Publish events
-                tenantEventPublisher.publishTenantCreatedEvent(tenantResponse.getId(), correlationId);
+                Tenant createdTenant = tenantRepository.findById(tenantResponse.getId())
+                        .orElseThrow(() -> new IllegalStateException("Created tenant not found"));
+
+                log.info("Created tenant metadata: {}", createdTenant.getMetadata());
+                log.info("Created tenant createdBy: {}", createdTenant.getCreatedBy());
+
+                tenantEventPublisher.publishTenantCreatedEvent(createdTenant, correlationId, userId);
 
                 // Send response back to auth-service
                 publishTenantCreationResponse(

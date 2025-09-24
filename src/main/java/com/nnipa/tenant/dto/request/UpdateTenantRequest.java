@@ -8,7 +8,11 @@ import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
-import lombok.NoArgsConstructor; /**
+import lombok.NoArgsConstructor;
+
+import java.util.Map;
+
+/**
  * Request DTO for updating tenant information
  */
 @Data
@@ -55,4 +59,7 @@ public class UpdateTenantRequest {
 
     @Min(1)
     private Integer apiRateLimit;
+
+    // Metadata for additional tenant information updates
+    private Map<String, String> metadata;
 }

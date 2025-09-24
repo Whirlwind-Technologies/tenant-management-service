@@ -22,6 +22,10 @@ public interface TenantMapper {
     @Mapping(target = "subscription", ignore = true)
     @Mapping(target = "settings", ignore = true)
     @Mapping(target = "featureFlags", ignore = true)
+    @Mapping(target = "createdBy", ignore = true)
+    @Mapping(target = "updatedBy", ignore = true)
+    @Mapping(target = "status", ignore = true)
+    @Mapping(source = "metadata", target = "metadata")  // ADD THIS LINE
     Tenant toEntity(CreateTenantRequest request);
 
     @Mapping(target = "parentTenantId", source = "parentTenant.id")
@@ -36,6 +40,6 @@ public interface TenantMapper {
     List<TenantSummaryResponse> toSummaryResponseList(List<Tenant> tenants);
 
     @BeanMapping(nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)
+    @Mapping(source = "metadata", target = "metadata")  // ADD THIS LINE TOO
     void updateEntity(@MappingTarget Tenant tenant, UpdateTenantRequest request);
 }
-

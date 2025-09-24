@@ -47,7 +47,7 @@ public class TenantService {
      */
     @Transactional
     public TenantResponse createTenant(CreateTenantRequest request, String createdBy, String correlationId) {
-        log.info("Creating tenant with code: {}", request.getTenantCode());
+        log.info("Creating tenant with code: {}, createdBy: {}", request.getTenantCode(), createdBy);
 
         // Check if tenant code already exists
         if (tenantRepository.existsByTenantCode(request.getTenantCode())) {
@@ -58,6 +58,17 @@ public class TenantService {
         Tenant tenant = tenantMapper.toEntity(request);
         tenant.setCreatedBy(createdBy);
         tenant.setStatus(TenantStatus.PENDING);
+
+        // IMPORTANT: Explicitly set metadata to ensure user_id is preserved
+        if (request.getMetadata() != null && !request.getMetadata().isEmpty()) {
+            tenant.setMetadata(new HashMap<>(request.getMetadata()));
+            log.info("Set tenant metadata: {}", tenant.getMetadata());
+        } else {
+            tenant.setMetadata(new HashMap<>());
+        }
+
+        // Ensure the createdBy is also stored in metadata for later retrieval
+        tenant.getMetadata().put("created_by_user_id", createdBy);
 
         // Handle parent tenant if specified
         if (request.getParentTenantCode() != null) {
@@ -75,7 +86,7 @@ public class TenantService {
 
         // Save tenant
         tenant = tenantRepository.save(tenant);
-        log.info("Tenant created with ID: {}", tenant.getId());
+        log.info("Tenant created with ID: {}, metadata: {}", tenant.getId(), tenant.getMetadata());
 
         // Create subscription
         subscriptionService.createSubscription(tenant, request);
@@ -93,8 +104,16 @@ public class TenantService {
             tenant = activateTenant(tenant.getId(), createdBy);
         }
 
-        // Publish event
-        eventPublisher.publishTenantCreatedEvent(tenant, correlationId);
+        // Publish event with the actual user ID from metadata
+        String actualUserId = tenant.getMetadata().get("user_id");
+        if (actualUserId != null) {
+            eventPublisher.publishTenantCreatedEvent(tenant, correlationId, actualUserId);
+            log.info("Published tenant created event with userId: {}", actualUserId);
+        } else {
+            // Fallback to the original method if no user_id in metadata
+            eventPublisher.publishTenantCreatedEvent(tenant, correlationId);
+            log.warn("No user_id found in tenant metadata, using fallback method");
+        }
 
         return tenantMapper.toResponse(tenant);
     }
